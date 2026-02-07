@@ -5,6 +5,82 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Scan Barcode - Food Recall Alert</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Barcode scanner specific styles */
+        #scanner-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 20px auto;
+            border: 3px solid #667eea;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #interactive {
+            width: 100%;
+            height: auto;
+        }
+
+        #interactive.viewport {
+            position: relative;
+        }
+
+        #interactive.viewport canvas,
+        #interactive.viewport video {
+            width: 100%;
+            height: auto;
+        }
+
+        /* Scanning overlay - the red line that moves */
+        .drawingBuffer {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #scanner-status {
+            text-align: center;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+
+        #scanner-status.scanning {
+            background: #e6f2ff;
+            color: #0066cc;
+        }
+
+        #scanner-status.detected {
+            background: #e6ffe6;
+            color: #00cc00;
+        }
+
+        #scanner-status.error {
+            background: #ffe6e6;
+            color: #cc0000;
+        }
+
+        .scanner-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .detected-code {
+            background: #f0f0f0;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #333;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -15,12 +91,30 @@
 
         <main>
             <div class="scan-section">
-                <div class="camera-placeholder">
-                    <p>📸 Camera View</p>
-                    <p class="coming-soon">Barcode scanning will be implemented here</p>
-                    <p class="tech-note">This will use QuaggaJS or similar library to scan barcodes from your phone's camera</p>
+                <!-- Status Display -->
+                <div id="scanner-status" class="scanning">
+                    📱 Position barcode in camera view
                 </div>
 
+                <!-- Scanner Controls -->
+                <div class="scanner-controls">
+                    <button id="start-scanner" onclick="startScanner()">Start Camera</button>
+                    <button id="stop-scanner" onclick="stopScanner()" style="display: none;">Stop Camera</button>
+                </div>
+
+                <!-- Camera Feed Container -->
+                <div id="scanner-container" style="display: none;">
+                    <div id="interactive" class="viewport"></div>
+                </div>
+
+                <!-- Display detected barcode -->
+                <div id="detected-barcode" style="display: none;">
+                    <div class="detected-code">
+                        Detected: <span id="barcode-value"></span>
+                    </div>
+                </div>
+
+                <!-- Manual entry fallback -->
                 <div class="manual-entry">
                     <h3>Or enter UPC manually:</h3>
                     <div class="input-group">
@@ -29,21 +123,22 @@
                     </div>
                 </div>
 
+                <!-- Results Display -->
                 <div id="scan-results" class="results-section" style="display: none;">
                     <!-- Results will be displayed here -->
                 </div>
             </div>
 
             <div class="implementation-notes">
-                <h3>Implementation Notes for Team:</h3>
+                <h3>How This Works:</h3>
                 <ul>
-                    <li><strong>QuaggaJS:</strong> Browser-based barcode scanner library</li>
-                    <li><strong>ZXing:</strong> Alternative cross-platform barcode library</li>
-                    <li><strong>HTML5 getUserMedia():</strong> Access device camera</li>
-                    <li>Works on both iOS Safari and Android Chrome</li>
-                    <li>Can decode UPC-A, EAN-13, and other formats</li>
+                    <li><strong>QuaggaJS:</strong> JavaScript barcode scanning library</li>
+                    <li><strong>Camera Access:</strong> Uses HTML5 getUserMedia() API</li>
+                    <li><strong>Barcode Formats:</strong> Supports UPC-A, EAN-13, Code 128, and more</li>
+                    <li><strong>Real-time Detection:</strong> Continuously scans the camera feed</li>
+                    <li>Works on both desktop and mobile browsers</li>
                 </ul>
-                <p><a href="https://serratus.github.io/quaggaJS/" target="_blank">QuaggaJS Demo</a></p>
+                <p><strong>Tip:</strong> Hold the barcode steady about 6-8 inches from camera. Make sure there's good lighting!</p>
             </div>
         </main>
 
@@ -52,15 +147,113 @@
         </footer>
     </div>
 
+    <!-- QuaggaJS Library from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
+
     <script>
         const API_URL = 'http://localhost:8000';
+        let scannerRunning = false;
 
-        async function searchManualUPC() {
-            const upc = document.getElementById('manual-upc').value.trim();
-            if (!upc) {
-                alert('Please enter a UPC code');
-                return;
+        // Initialize QuaggaJS with configuration
+        function startScanner() {
+            const scannerContainer = document.getElementById('scanner-container');
+            const startBtn = document.getElementById('start-scanner');
+            const stopBtn = document.getElementById('stop-scanner');
+            const statusDiv = document.getElementById('scanner-status');
+
+            scannerContainer.style.display = 'block';
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            statusDiv.className = 'scanning';
+            statusDiv.textContent = '📷 Starting camera...';
+
+            // QuaggaJS configuration
+            Quagga.init({
+                inputStream: {
+                    name: "Live",
+                    type: "LiveStream",
+                    target: document.querySelector('#interactive'),
+                    constraints: {
+                        width: 640,
+                        height: 480,
+                        facingMode: "environment" // Use back camera on mobile
+                    }
+                },
+                decoder: {
+                    readers: [
+                        "upc_reader",      // UPC-A barcodes (most common in US)
+                        "ean_reader",      // EAN-13 barcodes (common in Europe)
+                        "code_128_reader"  // Code 128 (also common)
+                    ]
+                },
+                locate: true, // Try to locate barcode in image
+                locator: {
+                    patchSize: "medium",
+                    halfSample: true
+                }
+            }, function(err) {
+                if (err) {
+                    console.error('QuaggaJS initialization error:', err);
+                    statusDiv.className = 'error';
+                    statusDiv.textContent = '❌ Camera access denied or not available';
+                    scannerContainer.style.display = 'none';
+                    startBtn.style.display = 'inline-block';
+                    stopBtn.style.display = 'none';
+                    return;
+                }
+                
+                console.log("QuaggaJS initialized successfully");
+                Quagga.start();
+                scannerRunning = true;
+                statusDiv.className = 'scanning';
+                statusDiv.textContent = '🔍 Scanning... Point camera at barcode';
+            });
+
+            // Event listener for when barcode is detected
+            Quagga.onDetected(onBarcodeDetected);
+        }
+
+        // Stop the scanner
+        function stopScanner() {
+            if (scannerRunning) {
+                Quagga.stop();
+                scannerRunning = false;
             }
+            
+            document.getElementById('scanner-container').style.display = 'none';
+            document.getElementById('start-scanner').style.display = 'inline-block';
+            document.getElementById('stop-scanner').style.display = 'none';
+            document.getElementById('scanner-status').className = '';
+            document.getElementById('scanner-status').textContent = '📱 Camera stopped';
+        }
+
+        // Called when a barcode is detected
+        function onBarcodeDetected(result) {
+            const code = result.codeResult.code;
+            const statusDiv = document.getElementById('scanner-status');
+            const detectedDiv = document.getElementById('detected-barcode');
+            const barcodeValue = document.getElementById('barcode-value');
+
+            console.log("Barcode detected:", code);
+
+            // Update UI to show detected code
+            statusDiv.className = 'detected';
+            statusDiv.textContent = '✓ Barcode detected!';
+            detectedDiv.style.display = 'block';
+            barcodeValue.textContent = code;
+
+            // Stop scanning after detection
+            stopScanner();
+
+            // Automatically search for this product
+            searchByUPC(code);
+        }
+
+        // Search for product using detected/manual UPC
+        async function searchByUPC(upc) {
+            const resultsDiv = document.getElementById('scan-results');
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<p>Searching...</p>';
 
             try {
                 const response = await fetch(`${API_URL}/api/search`, {
@@ -72,16 +265,39 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error('Product not found');
+                    throw new Error('Product not found in database');
                 }
 
                 const data = await response.json();
                 displayResult(data);
             } catch (error) {
-                alert('Error: ' + error.message);
+                resultsDiv.innerHTML = `
+                    <div class="product-card">
+                        <h4>❌ Product Not Found</h4>
+                        <p>UPC: ${upc}</p>
+                        <p style="color: #999;">This product is not in our database yet.</p>
+                        <button onclick="searchAgain()">Scan Another</button>
+                    </div>
+                `;
             }
         }
 
+        // Search using manually entered UPC
+        async function searchManualUPC() {
+            const upc = document.getElementById('manual-upc').value.trim();
+            if (!upc) {
+                alert('Please enter a UPC code');
+                return;
+            }
+
+            // Update detected barcode display
+            document.getElementById('detected-barcode').style.display = 'block';
+            document.getElementById('barcode-value').textContent = upc;
+
+            searchByUPC(upc);
+        }
+
+        // Display search result
         function displayResult(product) {
             const resultsDiv = document.getElementById('scan-results');
             resultsDiv.style.display = 'block';
@@ -104,19 +320,30 @@
                     <h4>${product.product_name}</h4>
                     <p><strong>Brand:</strong> ${product.brand_name}</p>
                     <p><strong>UPC:</strong> ${product.upc}</p>
+                    <p><strong>Category:</strong> ${product.category}</p>
                     ${recallStatus}
                     ${recallDetails}
+                    <button onclick="searchAgain()">Scan Another</button>
                     <button onclick="window.location.href='index.html'">Back to Home</button>
                 </div>
             `;
         }
 
-        // Placeholder function for when barcode scanner is implemented
-        function onBarcodeDetected(barcode) {
-            console.log('Barcode detected:', barcode);
-            document.getElementById('manual-upc').value = barcode;
-            searchManualUPC();
+        // Reset to scan another barcode
+        function searchAgain() {
+            document.getElementById('scan-results').style.display = 'none';
+            document.getElementById('detected-barcode').style.display = 'none';
+            document.getElementById('manual-upc').value = '';
+            document.getElementById('scanner-status').className = 'scanning';
+            document.getElementById('scanner-status').textContent = '📱 Ready to scan';
         }
+
+        // Stop scanner when leaving page
+        window.addEventListener('beforeunload', function() {
+            if (scannerRunning) {
+                Quagga.stop();
+            }
+        });
     </script>
 </body>
 </html>
