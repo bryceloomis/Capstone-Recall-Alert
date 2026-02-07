@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan Barcode - Food Recall Alert</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📷 Scan Barcode</h1>
+            <p class="tagline"><a href="index.html">← Back to Search</a></p>
+        </header>
+
+        <main>
+            <div class="scan-section">
+                <div class="camera-placeholder">
+                    <p>📸 Camera View</p>
+                    <p class="coming-soon">Barcode scanning will be implemented here</p>
+                    <p class="tech-note">This will use QuaggaJS or similar library to scan barcodes from your phone's camera</p>
+                </div>
+
+                <div class="manual-entry">
+                    <h3>Or enter UPC manually:</h3>
+                    <div class="input-group">
+                        <input type="text" id="manual-upc" placeholder="Enter UPC">
+                        <button onclick="searchManualUPC()">Search</button>
+                    </div>
+                </div>
+
+                <div id="scan-results" class="results-section" style="display: none;">
+                    <!-- Results will be displayed here -->
+                </div>
+            </div>
+
+            <div class="implementation-notes">
+                <h3>Implementation Notes for Team:</h3>
+                <ul>
+                    <li><strong>QuaggaJS:</strong> Browser-based barcode scanner library</li>
+                    <li><strong>ZXing:</strong> Alternative cross-platform barcode library</li>
+                    <li><strong>HTML5 getUserMedia():</strong> Access device camera</li>
+                    <li>Works on both iOS Safari and Android Chrome</li>
+                    <li>Can decode UPC-A, EAN-13, and other formats</li>
+                </ul>
+                <p><a href="https://serratus.github.io/quaggaJS/" target="_blank">QuaggaJS Demo</a></p>
+            </div>
+        </main>
+
+        <footer>
+            <p>Demo App - UC Berkeley MIDS Capstone Project</p>
+        </footer>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+
+        async function searchManualUPC() {
+            const upc = document.getElementById('manual-upc').value.trim();
+            if (!upc) {
+                alert('Please enter a UPC code');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/api/search`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ upc: upc })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Product not found');
+                }
+
+                const data = await response.json();
+                displayResult(data);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function displayResult(product) {
+            const resultsDiv = document.getElementById('scan-results');
+            resultsDiv.style.display = 'block';
+            
+            const recallStatus = product.is_recalled ? 
+                '<div class="alert-danger">⚠️ RECALLED - DO NOT CONSUME</div>' :
+                '<div class="alert-safe">✓ Safe - No active recalls</div>';
+
+            const recallDetails = product.is_recalled ? `
+                <div class="recall-details">
+                    <h4>Recall Information:</h4>
+                    <p><strong>Recall Date:</strong> ${product.recall_info.recall_date}</p>
+                    <p><strong>Reason:</strong> ${product.recall_info.reason}</p>
+                </div>
+            ` : '';
+
+            resultsDiv.innerHTML = `
+                <h3>Scan Result</h3>
+                <div class="product-card">
+                    <h4>${product.product_name}</h4>
+                    <p><strong>Brand:</strong> ${product.brand_name}</p>
+                    <p><strong>UPC:</strong> ${product.upc}</p>
+                    ${recallStatus}
+                    ${recallDetails}
+                    <button onclick="window.location.href='index.html'">Back to Home</button>
+                </div>
+            `;
+        }
+
+        // Placeholder function for when barcode scanner is implemented
+        function onBarcodeDetected(barcode) {
+            console.log('Barcode detected:', barcode);
+            document.getElementById('manual-upc').value = barcode;
+            searchManualUPC();
+        }
+    </script>
+</body>
+</html>

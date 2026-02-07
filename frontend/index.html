@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Food Recall Alert - Home</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍎 Food Recall Alert</h1>
+            <p class="tagline">Check if your food is safe</p>
+        </header>
+
+        <main>
+            <div class="search-section">
+                <h2>Search for a Product</h2>
+                
+                <!-- UPC Search -->
+                <div class="search-box">
+                    <label for="upc-input">Enter UPC Barcode:</label>
+                    <div class="input-group">
+                        <input type="text" id="upc-input" placeholder="e.g., 041190468831">
+                        <button onclick="searchByUPC()">Search UPC</button>
+                    </div>
+                </div>
+
+                <!-- OR divider -->
+                <div class="divider">OR</div>
+
+                <!-- Name Search -->
+                <div class="search-box">
+                    <label for="name-input">Search by Product Name:</label>
+                    <div class="input-group">
+                        <input type="text" id="name-input" placeholder="e.g., granola">
+                        <button onclick="searchByName()">Search Name</button>
+                    </div>
+                </div>
+
+                <!-- Link to scan page -->
+                <div class="scan-link">
+                    <a href="scan.html">📷 Or scan a barcode with your camera</a>
+                </div>
+            </div>
+
+            <!-- Results Display -->
+            <div id="results" class="results-section" style="display: none;">
+                <!-- Results will be inserted here by JavaScript -->
+            </div>
+
+            <!-- User Cart -->
+            <div class="cart-section">
+                <h2>My Cart</h2>
+                <div class="user-id-section">
+                    <label for="user-id">User ID:</label>
+                    <input type="text" id="user-id" placeholder="Enter your user ID" value="test_user">
+                    <button onclick="loadCart()">Load Cart</button>
+                </div>
+                <div id="cart-items" class="cart-items">
+                    <p class="empty-cart">Your cart is empty. Search for products to add them!</p>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Demo App - UC Berkeley MIDS Capstone Project</p>
+            <p>Data sources: FDA & USDA Recall APIs (simulated)</p>
+        </footer>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        let currentUserId = 'test_user';
+
+        // Update user ID when input changes
+        document.getElementById('user-id').addEventListener('change', (e) => {
+            currentUserId = e.target.value;
+        });
+
+        async function searchByUPC() {
+            const upc = document.getElementById('upc-input').value.trim();
+            if (!upc) {
+                alert('Please enter a UPC code');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/api/search`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ upc: upc })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Product not found');
+                }
+
+                const data = await response.json();
+                displaySingleProduct(data);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function searchByName() {
+            const name = document.getElementById('name-input').value.trim();
+            if (!name) {
+                alert('Please enter a product name');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/api/search`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ name: name })
+                });
+
+                if (!response.ok) {
+                    throw new Error('No products found');
+                }
+
+                const data = await response.json();
+                displayMultipleProducts(data.results);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function displaySingleProduct(product) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'block';
+            
+            const recallStatus = product.is_recalled ? 
+                '<div class="alert-danger">⚠️ RECALLED - DO NOT CONSUME</div>' :
+                '<div class="alert-safe">✓ Safe - No active recalls</div>';
+
+            const recallDetails = product.is_recalled ? `
+                <div class="recall-details">
+                    <h4>Recall Information:</h4>
+                    <p><strong>Recall Date:</strong> ${product.recall_info.recall_date}</p>
+                    <p><strong>Reason:</strong> ${product.recall_info.reason}</p>
+                </div>
+            ` : '';
+
+            const addToCartButton = !product.is_recalled ? 
+                `<button onclick="addToCart('${product.upc}', '${product.product_name}', '${product.brand_name}')">Add to Cart</button>` : '';
+
+            resultsDiv.innerHTML = `
+                <h3>Search Result</h3>
+                <div class="product-card">
+                    <h4>${product.product_name}</h4>
+                    <p><strong>Brand:</strong> ${product.brand_name}</p>
+                    <p><strong>UPC:</strong> ${product.upc}</p>
+                    <p><strong>Category:</strong> ${product.category}</p>
+                    ${recallStatus}
+                    ${recallDetails}
+                    ${addToCartButton}
+                </div>
+            `;
+        }
+
+        function displayMultipleProducts(products) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'block';
+            
+            let html = '<h3>Search Results</h3>';
+            
+            products.forEach(product => {
+                const recallStatus = product.is_recalled ? 
+                    '<span class="badge-recalled">RECALLED</span>' :
+                    '<span class="badge-safe">Safe</span>';
+
+                const addToCartButton = !product.is_recalled ? 
+                    `<button onclick="addToCart('${product.upc}', '${product.product_name}', '${product.brand_name}')">Add to Cart</button>` : '';
+
+                html += `
+                    <div class="product-card">
+                        <h4>${product.product_name} ${recallStatus}</h4>
+                        <p><strong>Brand:</strong> ${product.brand_name}</p>
+                        <p><strong>UPC:</strong> ${product.upc}</p>
+                        ${product.is_recalled ? `<p class="recall-reason">${product.recall_info.reason}</p>` : ''}
+                        ${addToCartButton}
+                    </div>
+                `;
+            });
+
+            resultsDiv.innerHTML = html;
+        }
+
+        async function addToCart(upc, productName, brandName) {
+            try {
+                const response = await fetch(`${API_URL}/api/user/cart`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        upc: upc,
+                        product_name: productName,
+                        brand_name: brandName,
+                        added_date: new Date().toISOString()
+                    })
+                });
+
+                const data = await response.json();
+                alert(data.message);
+                loadCart();
+            } catch (error) {
+                alert('Error adding to cart: ' + error.message);
+            }
+        }
+
+        async function loadCart() {
+            const userId = document.getElementById('user-id').value.trim() || 'test_user';
+            currentUserId = userId;
+
+            try {
+                const response = await fetch(`${API_URL}/api/user/cart/${userId}`);
+                const data = await response.json();
+                
+                const cartDiv = document.getElementById('cart-items');
+                
+                if (data.count === 0) {
+                    cartDiv.innerHTML = '<p class="empty-cart">Your cart is empty. Search for products to add them!</p>';
+                } else {
+                    let html = '';
+                    data.cart.forEach(item => {
+                        html += `
+                            <div class="cart-item">
+                                <div class="cart-item-info">
+                                    <strong>${item.product_name}</strong>
+                                    <p>${item.brand_name}</p>
+                                    <small>UPC: ${item.upc}</small>
+                                </div>
+                                <button class="remove-btn" onclick="removeFromCart('${item.upc}')">Remove</button>
+                            </div>
+                        `;
+                    });
+                    cartDiv.innerHTML = html;
+                }
+            } catch (error) {
+                alert('Error loading cart: ' + error.message);
+            }
+        }
+
+        async function removeFromCart(upc) {
+            try {
+                const response = await fetch(`${API_URL}/api/user/cart/${currentUserId}/${upc}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+                alert(data.message);
+                loadCart();
+            } catch (error) {
+                alert('Error removing from cart: ' + error.message);
+            }
+        }
+
+        // Load cart on page load
+        window.addEventListener('load', loadCart);
+    </script>
+</body>
+</html>
