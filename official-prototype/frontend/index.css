@@ -1,0 +1,25 @@
+/* Global styles: Tailwind + cream background, safe-area, utilities. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased font-sans;
+    color: #1A1A1A;
+    background-color: #F8F7F2;
+  }
+}
+
+@layer utilities {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .baked-in {
+    @apply transition-colors duration-200;
+  }
+  .baked-in-hover:hover {
+    @apply bg-black/[0.04];
+  }
+}
+
