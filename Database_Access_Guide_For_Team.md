@@ -45,7 +45,7 @@ Our project uses **AWS RDS PostgreSQL** to store:
 **You'll need these credentials from Bryce (or whoever set up the database):**
 
 ```
-Host: food-recall-db.XXXXX.us-east-2.rds.amazonaws.com
+Host: food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com
 Port: 5432
 Database: food_recall
 Username: postgres
@@ -72,7 +72,7 @@ Password: [ASK TEAM LEAD FOR PASSWORD]
 
 4. **Enter Connection Details:**
    ```
-   Host: food-recall-db.XXXXX.us-east-2.rds.amazonaws.com
+   Host: food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com
    Port: 5432
    Database: food_recall
    Username: postgres
