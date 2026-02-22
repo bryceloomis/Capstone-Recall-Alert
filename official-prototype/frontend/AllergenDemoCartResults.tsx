@@ -6,7 +6,7 @@ const MOCK_ITEMS = [
   { name: 'Oat milk yogurt', brand: 'Brand B', flag: 'May contain dairy', note: 'Double check label.' },
   { name: 'Mixed nuts trail mix', brand: 'Brand C', flag: 'Contains tree nuts' },
   { name: 'Plain rice crackers', brand: 'Brand D', flag: null },
-] as const;
+];
 
 export function AllergenDemoCartResults() {
   return (
