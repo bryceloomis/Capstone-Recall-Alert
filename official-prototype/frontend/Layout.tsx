@@ -4,8 +4,9 @@
  */
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Camera, ShoppingCart, Settings } from 'lucide-react';
+import { Home, Camera, ShoppingCart, Settings, UserCircle } from 'lucide-react';
 import { TopNav } from './TopNav';
+import { useStore } from './store';
 
 interface LayoutProps {
   children: ReactNode;
@@ -14,6 +15,7 @@ interface LayoutProps {
 export const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
   const isV2 = location.pathname.startsWith('/v2'); // V2 uses step nav in TopNav only; no sidebar/bottom nav
+  const isAuthenticated = useStore((s) => s.isAuthenticated);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -41,6 +43,12 @@ export const Layout = ({ children }: LayoutProps) => {
               <ShoppingCart className="w-5 h-5" strokeWidth={isActive('/groceries') ? 2.5 : 2} />
               <span className="text-xs font-medium">My List</span>
             </Link>
+            {isAuthenticated && (
+              <Link to="/profile" className={`flex flex-col items-center justify-center flex-1 h-full gap-0.5 transition-colors duration-200 ${isActive('/profile') ? 'text-white' : 'text-white/50 hover:text-white'}`}>
+                <UserCircle className="w-5 h-5" strokeWidth={isActive('/profile') ? 2.5 : 2} />
+                <span className="text-xs font-medium">Profile</span>
+              </Link>
+            )}
             <Link to="/settings" className={`flex flex-col items-center justify-center flex-1 h-full gap-0.5 transition-colors duration-200 ${isActive('/settings') ? 'text-white' : 'text-white/50 hover:text-white'}`}>
               <Settings className="w-5 h-5" strokeWidth={isActive('/settings') ? 2.5 : 2} />
               <span className="text-xs font-medium">Settings</span>
@@ -57,6 +65,7 @@ export const Layout = ({ children }: LayoutProps) => {
               { path: '/', label: 'Home', Icon: Home },
               { path: '/scan', label: 'Scan', Icon: Camera },
               { path: '/groceries', label: 'My Groceries', Icon: ShoppingCart },
+              ...(isAuthenticated ? [{ path: '/profile', label: 'Profile', Icon: UserCircle }] : []),
               { path: '/settings', label: 'Settings', Icon: Settings },
             ].map(({ path, label, Icon }) => (
               <Link

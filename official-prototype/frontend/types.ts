@@ -68,3 +68,38 @@ export interface UserProfile {
     urgencyThreshold: 'all' | 'class1_only';
   };
 }
+
+/* ── Auth & user preferences (RDS-backed) ── */
+
+export interface AuthRequest {
+  username: string;
+  password: string;
+}
+
+export interface AuthResponse {
+  user_id: number;
+  username: string;
+  token: string;
+}
+
+export interface RegisterRequest {
+  username: string;
+  password: string;
+}
+
+/** Persisted in the `user_preferences` RDS table. */
+export interface UserPreferences {
+  state_location: string;
+  allergies: string[];
+  diet_preferences: string[];
+}
+
+/** Full user row returned from GET /api/user/profile/:id */
+export interface UserProfileFull {
+  user_id: number;
+  username: string;
+  state_location: string | null;
+  allergies: string[];
+  diet_preferences: string[];
+  created_at: string;
+}

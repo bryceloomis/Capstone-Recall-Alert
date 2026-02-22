@@ -5,7 +5,10 @@
  * - getFdaRecalls: optional FDA recall endpoint (see backend/fda_recalls.py).
  */
 import axios from 'axios';
-import type { Product, SearchRequest, SearchResponse, UserCart, CartItem, RecallInfo } from './types';
+import type {
+  Product, SearchRequest, SearchResponse, UserCart, CartItem, RecallInfo,
+  AuthRequest, AuthResponse, RegisterRequest, UserPreferences, UserProfileFull,
+} from './types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -15,6 +18,15 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+/** Attach the JWT token to every outgoing request when available. */
+export function setAuthToken(token: string | null) {
+  if (token) {
+    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  } else {
+    delete api.defaults.headers.common['Authorization'];
+  }
+}
 
 /** Map backend recall payload to app RecallInfo (e.g. hazard class string → Class I/II/III). */
 function mapRecallInfo(raw: Record<string, unknown> | null | undefined): RecallInfo | undefined {
@@ -165,6 +177,33 @@ export const addToCart = async (item: CartItem & { user_id: string }) => {
 
 export const removeFromCart = async (userId: string, upc: string) => {
   const { data } = await api.delete(`/api/user/cart/${userId}/${upc}`);
+  return data;
+};
+
+/* ── Auth endpoints ── */
+
+export const registerUser = async (req: RegisterRequest): Promise<AuthResponse> => {
+  const { data } = await api.post<AuthResponse>('/api/auth/register', req);
+  return data;
+};
+
+export const loginUser = async (req: AuthRequest): Promise<AuthResponse> => {
+  const { data } = await api.post<AuthResponse>('/api/auth/login', req);
+  return data;
+};
+
+/* ── User profile / preferences ── */
+
+export const getUserProfile = async (userId: number): Promise<UserProfileFull> => {
+  const { data } = await api.get<UserProfileFull>(`/api/user/profile/${userId}`);
+  return data;
+};
+
+export const updateUserPreferences = async (
+  userId: number,
+  prefs: UserPreferences,
+): Promise<UserProfileFull> => {
+  const { data } = await api.put<UserProfileFull>(`/api/user/profile/${userId}`, prefs);
   return data;
 };
 

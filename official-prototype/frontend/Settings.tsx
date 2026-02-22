@@ -1,15 +1,20 @@
 /**
- * MVP Settings: User ID, notification toggles, privacy copy, and "Sign in or create account" (resets onboarding).
+ * MVP Settings: Account info, notification toggles, privacy copy, and sign-in / sign-out.
+ * Authenticated users see their username + a link to edit their profile preferences.
  */
 import { useState } from 'react';
-import { User, Bell, Shield, Info } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { User, Bell, Shield, Info, MapPin } from 'lucide-react';
 import { useStore } from './store';
 
 export const Settings = () => {
   const userId = useStore((state) => state.userId);
   const setUserId = useStore((state) => state.setUserId);
-  const hasSeenOnboarding = useStore((state) => state.hasSeenOnboarding);
   const setHasSeenOnboarding = useStore((state) => state.setHasSeenOnboarding);
+  const isAuthenticated = useStore((state) => state.isAuthenticated);
+  const authUsername = useStore((state) => state.authUsername);
+  const logout = useStore((state) => state.logout);
+  const userPreferences = useStore((state) => state.userPreferences);
 
   const [localUserId, setLocalUserId] = useState(userId);
   const [notifications, setNotifications] = useState({
@@ -43,21 +48,74 @@ export const Settings = () => {
           <User className={iconClass} />
           <h3 className="text-lg font-semibold text-black">Account</h3>
         </div>
-        <div>
-          <label className={labelClass}>User ID</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={localUserId}
-              onChange={(e) => setLocalUserId(e.target.value)}
-              className={inputClass}
-            />
-            <button onClick={handleSaveUserId} className={btnClass}>
-              Save
-            </button>
+
+        {isAuthenticated ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-[#888]">Signed in as</p>
+                <p className="text-black font-medium">{authUsername}</p>
+              </div>
+              <button onClick={logout} className="text-sm font-medium text-red-600 hover:text-red-800 transition-colors">
+                Sign out
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div>
+            <label className={labelClass}>User ID</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={localUserId}
+                onChange={(e) => setLocalUserId(e.target.value)}
+                className={inputClass}
+              />
+              <button onClick={handleSaveUserId} className={btnClass}>
+                Save
+              </button>
+            </div>
+          </div>
+        )}
       </section>
+
+      {/* Profile preferences summary (authenticated users) */}
+      {isAuthenticated && (
+        <section className={sectionClass}>
+          <div className={headingClass}>
+            <MapPin className={iconClass} />
+            <h3 className="text-lg font-semibold text-black">Profile & preferences</h3>
+          </div>
+          {userPreferences ? (
+            <div className="space-y-3 text-sm">
+              <div>
+                <span className="font-medium text-black">State: </span>
+                <span className="text-[#888]">{userPreferences.state_location || 'Not set'}</span>
+              </div>
+              <div>
+                <span className="font-medium text-black">Allergies: </span>
+                <span className="text-[#888]">
+                  {userPreferences.allergies.length > 0 ? userPreferences.allergies.join(', ') : 'None'}
+                </span>
+              </div>
+              <div>
+                <span className="font-medium text-black">Diet: </span>
+                <span className="text-[#888]">
+                  {userPreferences.diet_preferences.length > 0 ? userPreferences.diet_preferences.join(', ') : 'None'}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-[#888]">No preferences set yet.</p>
+          )}
+          <Link
+            to="/profile"
+            className="inline-block mt-4 text-sm font-medium text-[#1A1A1A] underline hover:no-underline"
+          >
+            Edit profile & preferences
+          </Link>
+        </section>
+      )}
 
       <section className={sectionClass}>
         <div className={headingClass}>
@@ -122,15 +180,17 @@ export const Settings = () => {
           <p><span className="font-medium text-black">Version:</span> 1.0.0</p>
           <p><span className="font-medium text-black">Project:</span> UC Berkeley MIDS Capstone</p>
           <p><span className="font-medium text-black">Data sources:</span> FDA & USDA Recall APIs</p>
-          <div className="pt-4 border-t border-black/10">
-            <button
-              onClick={handleBackToSignIn}
-              className="text-sm font-medium text-[#888] hover:text-black transition-colors"
-            >
-              Sign in or create account
-            </button>
-            <p className="text-xs text-[#888] mt-1">Return to the sign-in page to create an account.</p>
-          </div>
+          {!isAuthenticated && (
+            <div className="pt-4 border-t border-black/10">
+              <button
+                onClick={handleBackToSignIn}
+                className="text-sm font-medium text-[#888] hover:text-black transition-colors"
+              >
+                Sign in or create account
+              </button>
+              <p className="text-xs text-[#888] mt-1">Return to the sign-in page to create an account.</p>
+            </div>
+          )}
         </div>
       </section>
     </div>
