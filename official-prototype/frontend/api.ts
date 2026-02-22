@@ -119,7 +119,7 @@ export const searchProduct = async (request: SearchRequest): Promise<Product | P
 
   // Handle single product response
   if (data.upc && data.product_name) {
-    const recallInfo = data.recall_info != null ? mapRecallInfo(data.recall_info as Record<string, unknown>) : data.recall_info;
+    const recallInfo = data.recall_info != null ? mapRecallInfo(data.recall_info as unknown as Record<string, unknown>) : data.recall_info;
     return {
       upc: data.upc,
       product_name: data.product_name,
