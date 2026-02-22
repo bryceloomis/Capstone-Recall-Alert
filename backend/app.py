@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import csv
 from datetime import datetime
+from database import test_connection, execute_query
 
 app = FastAPI(title="Food Recall Alert API")
 
@@ -227,6 +228,37 @@ async def remove_from_cart(user_id: str, upc: str):
         "message": "Item removed from cart",
         "cart_count": len(user_carts[user_id])
     }
+
+@app.get("/api/db-test")
+async def db_test():
+    """
+    Test endpoint: verifies RDS connection and returns row counts + first 5 rows
+    from each table. Remove or restrict access before going to production.
+    """
+    connected = test_connection()
+    if not connected:
+        raise HTTPException(status_code=503, detail="Cannot connect to database. Check .env credentials and RDS security group.")
+
+    tables = ["users", "products", "recalls", "user_carts", "alerts"]
+    summary = {}
+    for table in tables:
+        try:
+            rows = execute_query(f"SELECT * FROM {table} LIMIT 5;")
+            count_result = execute_query(f"SELECT COUNT(*) AS total FROM {table};")
+            summary[table] = {
+                "total_rows": count_result[0]["total"] if count_result else 0,
+                "sample_rows": rows,
+            }
+        except Exception as e:
+            summary[table] = {"error": str(e)}
+
+    return {
+        "db_connected": True,
+        "rds_host": "food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com",
+        "database": "food_recall",
+        "tables": summary,
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
