@@ -109,9 +109,16 @@ export const BarcodeScanner = ({ onScan, onClose }: BarcodeScannerProps) => {
         </button>
       </div>
       <div className="flex-1 flex flex-col items-center justify-center min-h-0">
-        {isScanning ? (
-          <video ref={videoRef} autoPlay playsInline muted className="max-w-full max-h-full object-contain" />
-        ) : (
+        {/* video is always mounted so videoRef is never null when startCamera runs */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="max-w-full max-h-full object-contain"
+          style={{ display: isScanning ? 'block' : 'none' }}
+        />
+        {!isScanning && (
           <div className="text-center">
             <Camera className="w-14 h-14 text-neutral-500 mx-auto mb-4" />
             <p className="text-neutral-400 text-sm mb-4">Ready to scan</p>
