@@ -20,9 +20,11 @@ const EXAMPLE_RECALL_NOTIFICATION = {
 
 export const Home = () => {
   const [results, setResults] = useState<Product | Product[] | null>(null);
-  const searchMutation = useSearchProduct();
+  const searchMutation    = useSearchProduct();
   const addToCartMutation = useAddToCart();
-  const userId = useStore((state) => state.userId);
+  const userId            = useStore((state) => state.userId);
+  const userProfile       = useStore((state) => state.userProfile);
+  const isSignedIn        = userProfile != null && (userProfile.name != null || userProfile.email != null);
 
   const handleSearch = async (query: string, type: 'upc' | 'name') => {
     try {
@@ -37,6 +39,10 @@ export const Home = () => {
   };
 
   const handleAddToCart = async (product: Product) => {
+    if (!isSignedIn) {
+      alert('Please sign in or create an account to save items to your grocery list.');
+      return;
+    }
     try {
       await addToCartMutation.mutateAsync({
         user_id: userId,
@@ -45,9 +51,9 @@ export const Home = () => {
         brand_name: product.brand_name,
         added_date: new Date().toISOString(),
       });
-      alert('Added to My Groceries.');
+      alert('Added to My Groceries!');
     } catch (error) {
-      alert('Error adding to cart: ' + (error as Error).message);
+      alert('Error adding to list: ' + (error as Error).message);
     }
   };
 

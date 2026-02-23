@@ -1,8 +1,9 @@
 /**
  * MVP My Groceries: "Frequently purchased" (mock list with one recalled item), User ID + Load list, then CartList from API.
  */
-import { useState, useEffect } from 'react';
-import { ShoppingCart, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { useState } from 'react';
+import { ShoppingCart, Loader2, AlertCircle, CheckCircle, LogIn } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { CartList } from './CartList';
 import { ProductCard } from './ProductCard';
 import { RecallAlert } from './RecallAlert';
@@ -57,23 +58,15 @@ const MOCK_FREQUENTLY_PURCHASED: (Product & { lastPurchased?: string })[] = [
 ];
 
 export const MyGroceries = () => {
-  const userId = useStore((state) => state.userId);
-  const setUserId = useStore((state) => state.setUserId);
-  const [userIdInput, setUserIdInput] = useState(userId);
+  const userId      = useStore((state) => state.userId);
+  const userProfile = useStore((state) => state.userProfile);
+  const isSignedIn  = userProfile != null && (userProfile.name != null || userProfile.email != null);
+
   const [checkedProduct, setCheckedProduct] = useState<Product | null>(null);
 
-  const { data: cartData, isLoading, refetch } = useCart(userId);
-  const removeMutation = useRemoveFromCart();
-  const searchMutation = useSearchProduct();
-
-  useEffect(() => {
-    setUserIdInput(userId);
-  }, [userId]);
-
-  const handleLoadCart = () => {
-    setUserId(userIdInput);
-    refetch();
-  };
+  const { data: cartData, isLoading } = useCart(userId);
+  const removeMutation  = useRemoveFromCart();
+  const searchMutation  = useSearchProduct();
 
   const handleRemove = async (upc: string) => {
     if (confirm('Remove this item from your list?')) {
@@ -145,61 +138,65 @@ export const MyGroceries = () => {
         </div>
       </section>
 
-      <div className="rounded-xl p-4 border border-black/5">
-        <label className="block text-sm font-medium text-[#1A1A1A] mb-2">
-          User ID
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={userIdInput}
-            onChange={(e) => setUserIdInput(e.target.value)}
-            className="flex-1 px-4 py-2.5 bg-cream border border-black/10 rounded-xl text-black placeholder-[#888] focus:outline-none focus:border-black/20"
-            placeholder="Enter your user ID"
-          />
-          <button
-            onClick={handleLoadCart}
-            className="px-5 py-2.5 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200"
-          >
-            Load list
-          </button>
-        </div>
-      </div>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold text-black">Your current list</h3>
-        <p className="text-sm text-[#888]">Items you’ve saved to check for recalls.</p>
-      </section>
-
-      {isLoading && (
-        <div className="flex justify-center py-12">
-          <Loader2 className="w-6 h-6 animate-spin text-[#888]" />
+      {/* Sign-in prompt for guests */}
+      {!isSignedIn && (
+        <div className="rounded-xl p-5 border border-black/10 bg-black/[0.02] flex items-start gap-4">
+          <LogIn className="w-5 h-5 text-[#888] shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-black">Sign in to save your grocery list</p>
+            <p className="text-sm text-[#888] mt-1">
+              Create an account to keep your list across devices and get recall alerts.
+            </p>
+            <Link
+              to="/"
+              onClick={() => useStore.getState().setHasSeenOnboarding(false)}
+              className="inline-block mt-3 px-4 py-2 bg-black text-white text-sm font-medium rounded-xl hover:opacity-90 transition-opacity"
+            >
+              Sign in or create account
+            </Link>
+          </div>
         </div>
       )}
 
-      {!isLoading && cartData && (
-        <div className="space-y-6">
-          <CartList
-            items={cartData.cart}
-            onRemove={handleRemove}
-            onCheckItem={handleCheckItem}
-            isLoading={removeMutation.isPending || searchMutation.isPending}
-          />
-          {checkedProduct && (
-            <div className="pt-6 border-t border-black/10">
-              <h3 className="text-lg font-semibold text-black mb-4">
-                Status check result
-              </h3>
-              <ProductCard product={checkedProduct} showAddButton={false} />
-              <button
-                onClick={() => setCheckedProduct(null)}
-                className="mt-4 text-sm font-medium text-[#888] hover:text-black transition-colors"
-              >
-                Close
-              </button>
+      {/* Signed-in: grocery list */}
+      {isSignedIn && (
+        <>
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-black">Your current list</h3>
+            <p className="text-sm text-[#888]">Items you’ve saved to check for recalls.</p>
+          </section>
+
+          {isLoading && (
+            <div className="flex justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-[#888]" />
             </div>
           )}
-        </div>
+
+          {!isLoading && cartData && (
+            <div className="space-y-6">
+              <CartList
+                items={cartData.cart}
+                onRemove={handleRemove}
+                onCheckItem={handleCheckItem}
+                isLoading={removeMutation.isPending || searchMutation.isPending}
+              />
+              {checkedProduct && (
+                <div className="pt-6 border-t border-black/10">
+                  <h3 className="text-lg font-semibold text-black mb-4">
+                    Status check result
+                  </h3>
+                  <ProductCard product={checkedProduct} showAddButton={false} />
+                  <button
+                    onClick={() => setCheckedProduct(null)}
+                    className="mt-4 text-sm font-medium text-[#888] hover:text-black transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       <section className="pt-6 border-t border-black/10">
