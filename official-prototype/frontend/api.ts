@@ -102,6 +102,7 @@ export async function checkOpenFoodFacts(upc: string): Promise<Product> {
     brand_name: (product.brands as string) || 'Unknown Brand',
     category: product.categories as string | undefined,
     ingredients,
+    image_url: (product.image_front_small_url as string) || (product.image_url as string) || undefined,
     is_recalled: false,
   };
 }
@@ -169,6 +170,60 @@ export const removeFromCart = async (userId: string, upc: string) => {
   const { data } = await api.delete(`/api/user/cart/${userId}/${upc}`);
   return data;
 };
+
+/**
+ * Barcode scan lookup: fetches Open Food Facts (rich product data + image) and
+ * our recall DB in parallel, then merges them. This way every scan gets the best
+ * available product info AND an accurate recall check even for products not in our DB.
+ */
+export async function lookupByUPC(upc: string): Promise<Product> {
+  const [offResult, recallResult] = await Promise.allSettled([
+    checkOpenFoodFacts(upc),
+    fetch(`${API_BASE}/api/recalls/check/${upc}`).then((r) => r.json() as Promise<{ is_recalled: boolean; recall_info: RecallInfo | null }>),
+  ]);
+
+  const offProduct = offResult.status === 'fulfilled' ? offResult.value : null;
+  const recallData = recallResult.status === 'fulfilled' ? recallResult.value : null;
+
+  // If Open Food Facts found nothing useful, fall back to our DB for product name/brand
+  const nameFromOFF = offProduct?.product_name;
+  const isUnknown   = !nameFromOFF || nameFromOFF === `Product ${upc}` || nameFromOFF === 'Unknown Product';
+
+  let productName = nameFromOFF ?? `Product ${upc}`;
+  let brandName   = offProduct?.brand_name ?? '';
+  let category    = offProduct?.category;
+  let ingredients = offProduct?.ingredients;
+  let imageUrl    = offProduct?.image_url;
+
+  if (isUnknown) {
+    // Try our DB as a fallback for product metadata
+    try {
+      const res = await fetch(`${API_BASE}/api/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ upc }),
+      });
+      if (res.ok) {
+        const db = (await res.json()) as Record<string, unknown>;
+        productName = String(db.product_name ?? productName);
+        brandName   = String(db.brand_name   ?? brandName);
+        category    = (db.category as string) ?? category;
+        ingredients = Array.isArray(db.ingredients) ? (db.ingredients as string[]) : ingredients;
+      }
+    } catch { /* ignore — we'll show what we have */ }
+  }
+
+  return {
+    upc,
+    product_name: productName,
+    brand_name:   brandName,
+    category,
+    ingredients,
+    image_url:    imageUrl,
+    is_recalled:  recallData?.is_recalled  ?? false,
+    recall_info:  recallData?.recall_info  ?? undefined,
+  };
+}
 
 export interface AuthUser {
   id: number;
