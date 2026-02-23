@@ -27,8 +27,13 @@ export function TopNav() {
   const location = useLocation();
   const navigate = useNavigate();
   const setHasSeenOnboarding = useStore((s) => s.setHasSeenOnboarding);
+  const setUserProfile = useStore((s) => s.setUserProfile);
+  const setUserId = useStore((s) => s.setUserId);
+  const userProfile = useStore((s) => s.userProfile);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const isSignedIn = userProfile != null && (userProfile.name != null || userProfile.email != null);
 
   const isV2StepFlow = V2_STEP_PATHS.includes(location.pathname);
   const stepIndex = V2_STEP_PATHS.indexOf(location.pathname);
@@ -36,6 +41,12 @@ export function TopNav() {
   const links = isV2StepFlow ? [] : MVP_LINKS;
 
   const handleBackToSignIn = () => {
+    setHasSeenOnboarding(false);
+  };
+
+  const handleSignOut = () => {
+    setUserProfile({ name: undefined, email: undefined });
+    setUserId('test_user');
     setHasSeenOnboarding(false);
   };
 
@@ -109,14 +120,30 @@ export function TopNav() {
         </nav>
 
         <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={handleBackToSignIn}
-            className="flex items-center gap-2 text-sm font-medium text-white/50 hover:text-white transition-colors duration-200"
-          >
-            <LogIn className="w-4 h-4" />
-            Sign in
-          </button>
+          {isSignedIn ? (
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-white/70 hidden md:block">
+                {userProfile!.name ?? userProfile!.email}
+              </span>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="flex items-center gap-1.5 text-sm font-medium text-white/50 hover:text-white transition-colors duration-200"
+              >
+                <LogIn className="w-4 h-4 rotate-180" />
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleBackToSignIn}
+              className="flex items-center gap-2 text-sm font-medium text-white/50 hover:text-white transition-colors duration-200"
+            >
+              <LogIn className="w-4 h-4" />
+              Sign in
+            </button>
+          )}
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}

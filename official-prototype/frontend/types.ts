@@ -60,9 +60,13 @@ export interface IngredientPreferences {
 }
 
 export interface UserProfile {
-  userId: string;
+  /** Set after registration/login */
+  name?: string;
+  email?: string;
+  /** Legacy field used before auth was added */
+  userId?: string;
   ingredientPreferences?: IngredientPreferences;
-  notificationPreferences: {
+  notificationPreferences?: {
     inApp: boolean;
     push: boolean;
     urgencyThreshold: 'all' | 'class1_only';
