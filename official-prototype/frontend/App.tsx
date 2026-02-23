@@ -12,6 +12,7 @@ import { Layout } from './Layout';
 import { Home } from './Home';
 import { Scan } from './Scan';
 import { MyGroceries } from './MyGroceries';
+import { MyGroceriesExample } from './MyGroceriesExample';
 import { Settings } from './Settings';
 import { V2Home } from './V2Home';
 import { V2Scan } from './V2Scan';
@@ -48,6 +49,7 @@ function App() {
             <Route path="/" element={<Home />} />
             <Route path="/scan" element={<Scan />} />
             <Route path="/groceries" element={<MyGroceries />} />
+            <Route path="/groceries-example" element={<MyGroceriesExample />} />
             <Route path="/settings" element={<Settings />} />
             {/* V2 – Stretch goal static demo */}
             <Route path="/v2" element={<V2Home />} />

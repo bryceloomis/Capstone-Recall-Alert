@@ -1,14 +1,19 @@
 /**
- * First-time entry: create account form + "Try it out first". Sets hasSeenOnboarding then shows main app.
+ * First-time entry: "Create account" and "Sign in" tabs + "Try it out first".
+ * Sets hasSeenOnboarding then shows main app.
  */
 import { useState } from 'react';
 import { useStore } from './store';
 import { registerUser, loginUser } from './api';
 
+type Tab = 'create' | 'signin';
+
 export function Onboarding() {
   const setHasSeenOnboarding = useStore((s) => s.setHasSeenOnboarding);
   const setUserId = useStore((s) => s.setUserId);
   const setUserProfile = useStore((s) => s.setUserProfile);
+
+  const [tab, setTab] = useState<Tab>('create');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,6 +22,18 @@ export function Onboarding() {
 
   const handleSkip = () => {
     setHasSeenOnboarding(true);
+  };
+
+  const clearForm = () => {
+    setError(null);
+    setName('');
+    setEmail('');
+    setPassword('');
+  };
+
+  const handleTabChange = (newTab: Tab) => {
+    setTab(newTab);
+    clearForm();
   };
 
   const handleCreateAccount = async (e: React.FormEvent) => {
@@ -52,6 +69,26 @@ export function Onboarding() {
     }
   };
 
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      setError('Please enter your email and password.');
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const user = await loginUser(email, password);
+      setUserId(String(user.id));
+      setUserProfile({ name: user.name, email: user.email });
+      setHasSeenOnboarding(true);
+    } catch {
+      setError('Invalid email or password. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const inputClass =
     'w-full px-4 py-3 bg-transparent border border-black/5 rounded-xl text-[#1A1A1A] placeholder-[#888] focus:outline-none focus:border-black/15 hover:border-black/10 transition-colors duration-200';
 
@@ -61,44 +98,117 @@ export function Onboarding() {
         <h1 className="text-2xl md:text-3xl font-semibold text-[#1A1A1A] tracking-tight">
           Food Recall Alert
         </h1>
-        <p className="text-[#888] text-sm mt-2 mb-10">
-          Check recalls and keep your groceries safe. Create an account to save your list and get personalized alerts, or try it out first.
+        <p className="text-[#888] text-sm mt-2 mb-8">
+          Check recalls and keep your groceries safe.
         </p>
 
-        <form onSubmit={handleCreateAccount} className="space-y-4 mb-8">
-          <h2 className="text-sm font-semibold text-[#1A1A1A]">Create an account</h2>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Name"
-            className={inputClass}
-          />
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email"
-            className={inputClass}
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            className={inputClass}
-          />
-          {error && (
-            <p className="text-red-500 text-sm">{error}</p>
-          )}
+        {/* Tab switcher */}
+        <div className="flex rounded-xl border border-black/10 p-1 mb-6 bg-white">
           <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200 disabled:opacity-50"
+            type="button"
+            onClick={() => handleTabChange('create')}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors duration-200 ${
+              tab === 'create'
+                ? 'bg-[#1A1A1A] text-white'
+                : 'text-[#888] hover:text-[#1A1A1A]'
+            }`}
           >
-            {loading ? 'Creating account...' : 'Create account'}
+            Create account
           </button>
-        </form>
+          <button
+            type="button"
+            onClick={() => handleTabChange('signin')}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors duration-200 ${
+              tab === 'signin'
+                ? 'bg-[#1A1A1A] text-white'
+                : 'text-[#888] hover:text-[#1A1A1A]'
+            }`}
+          >
+            Sign in
+          </button>
+        </div>
+
+        {/* Create account form */}
+        {tab === 'create' && (
+          <form onSubmit={handleCreateAccount} className="space-y-4 mb-8">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Name"
+              className={inputClass}
+              autoComplete="name"
+            />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email"
+              className={inputClass}
+              autoComplete="email"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              className={inputClass}
+              autoComplete="new-password"
+            />
+            {error && (
+              <p className="text-red-500 text-sm">{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200 disabled:opacity-50"
+            >
+              {loading ? 'Creating account…' : 'Create account'}
+            </button>
+          </form>
+        )}
+
+        {/* Sign in form */}
+        {tab === 'signin' && (
+          <form onSubmit={handleSignIn} className="space-y-4 mb-8">
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email"
+              className={inputClass}
+              autoComplete="email"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              className={inputClass}
+              autoComplete="current-password"
+            />
+            {error && (
+              <p className="text-red-500 text-sm">{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200 disabled:opacity-50"
+            >
+              {loading ? 'Signing in…' : 'Sign in'}
+            </button>
+            <p className="text-center text-xs text-[#888]">
+              Don't have an account?{' '}
+              <button
+                type="button"
+                onClick={() => handleTabChange('create')}
+                className="text-[#1A1A1A] font-medium underline underline-offset-2"
+              >
+                Create one
+              </button>
+            </p>
+          </form>
+        )}
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">

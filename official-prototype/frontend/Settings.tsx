@@ -1,8 +1,8 @@
 /**
- * MVP Settings: User ID, notification toggles, privacy copy, and "Sign in or create account" (resets onboarding).
+ * MVP Settings: Account info, notification toggles, privacy copy, and sign-out at bottom.
  */
 import { useState } from 'react';
-import { User, Bell, Shield, Info } from 'lucide-react';
+import { User, Bell, Shield, Info, LogOut } from 'lucide-react';
 import { useStore } from './store';
 
 export const Settings = () => {
@@ -62,11 +62,6 @@ export const Settings = () => {
             <div>
               <p className="text-xs text-[#888] mb-0.5">Email</p>
               <p className="text-sm font-medium text-black">{userProfile!.email ?? '—'}</p>
-            </div>
-            <div className="pt-2">
-              <button onClick={handleSignOut} className={btnClass}>
-                Sign out
-              </button>
             </div>
           </div>
         ) : (
@@ -150,18 +145,30 @@ export const Settings = () => {
           <p><span className="font-medium text-black">Version:</span> 1.0.0</p>
           <p><span className="font-medium text-black">Project:</span> UC Berkeley MIDS Capstone</p>
           <p><span className="font-medium text-black">Data sources:</span> FDA & USDA Recall APIs</p>
-          {!isSignedIn && (
-            <div className="pt-4 border-t border-black/10">
-              <button
-                onClick={handleBackToSignIn}
-                className="text-sm font-medium text-[#888] hover:text-black transition-colors"
-              >
-                Sign in or create account
-              </button>
-              <p className="text-xs text-[#888] mt-1">Return to the sign-in page to create an account.</p>
-            </div>
-          )}
         </div>
+      </section>
+
+      {/* Sign out / sign in — bottom of page */}
+      <section className={sectionClass}>
+        {isSignedIn ? (
+          <button
+            onClick={handleSignOut}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-black/10 text-black rounded-xl text-sm font-medium hover:bg-black hover:text-white hover:border-black transition-colors duration-200"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign out
+          </button>
+        ) : (
+          <div className="text-center space-y-2">
+            <button
+              onClick={handleBackToSignIn}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-black text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
+            >
+              Sign in or create account
+            </button>
+            <p className="text-xs text-[#888]">Return to the sign-in page.</p>
+          </div>
+        )}
       </section>
     </div>
   );
