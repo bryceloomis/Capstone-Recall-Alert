@@ -7,7 +7,9 @@
 import axios from 'axios';
 import type { Product, SearchRequest, SearchResponse, UserCart, CartItem, RecallInfo } from './types';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// In dev: falls back to localhost:8000. In production: VITE_API_URL='' (empty)
+// so all /api/* calls are relative and nginx proxies them to FastAPI.
+const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE,
