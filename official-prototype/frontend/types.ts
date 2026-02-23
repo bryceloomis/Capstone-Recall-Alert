@@ -7,6 +7,7 @@ export interface Product {
   brand_name: string;
   category?: string;
   ingredients?: string[];
+  image_url?: string;
   is_recalled: boolean;
   recall_info?: RecallInfo;
 }

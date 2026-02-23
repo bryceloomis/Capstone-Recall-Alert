@@ -190,6 +190,21 @@ async def get_all_recalls():
     }
 
 
+@app.get("/api/recalls/check/{upc}")
+async def check_recall_for_upc(upc: str):
+    """Check whether a specific UPC has an active recall.
+    Called by the barcode scanner so every scan gets a recall check
+    even if the product isn't in our products table.
+    """
+    rows = execute_query(
+        "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
+        (upc,)
+    )
+    if rows:
+        return {"is_recalled": True, "recall_info": format_recall(rows[0])}
+    return {"is_recalled": False, "recall_info": None}
+
+
 @app.get("/api/user/cart/{user_id}")
 async def get_user_cart(user_id: str):
     """Return all items in a user's saved grocery list from RDS."""

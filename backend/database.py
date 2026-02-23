@@ -10,10 +10,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com"),
-    "port": int(os.getenv("DB_PORT", "5432")),
-    "dbname": os.getenv("DB_NAME", "food_recall"),
-    "user": os.getenv("DB_USER", "postgres"),
+    "host":     os.getenv("DB_HOST", "food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com"),
+    "port":     int(os.getenv("DB_PORT", "5432")),
+    "dbname":   os.getenv("DB_NAME", "food_recall"),
+    "user":     os.getenv("DB_USER", "postgres"),
     "password": os.getenv("DB_PASSWORD"),
 }
 
@@ -35,18 +35,28 @@ def test_connection() -> bool:
         return False
 
 
-def execute_query(query: str, params=None, fetch: bool = True):
+def execute_query(query: str, params=None):
     """
-    Run a query and return results (list of dicts) or rowcount for writes.
-    Always closes the connection when done.
+    Execute a SQL query, always commit, and return results as a list of dicts.
+
+    - SELECT queries: commit is a no-op, returns rows.
+    - INSERT/UPDATE/DELETE without RETURNING: returns [].
+    - INSERT/UPDATE with RETURNING: fetches and returns the returned rows.
+
+    Bug fix: previously commit() was only called when fetch=False, so any
+    INSERT/UPDATE that used RETURNING (fetch=True) was silently rolled back
+    when the connection closed.
     """
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, params)
-            if fetch:
-                return [dict(row) for row in cur.fetchall()]
-            conn.commit()
-            return cur.rowcount
+            # Fetch results BEFORE commit so the cursor buffer is still accessible.
+            results = [dict(row) for row in cur.fetchall()] if cur.description else []
+            conn.commit()   # Always commit — writes are persisted, reads are no-ops
+            return results
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
