@@ -10,6 +10,10 @@ export const Settings = () => {
   const setUserId = useStore((state) => state.setUserId);
   const hasSeenOnboarding = useStore((state) => state.hasSeenOnboarding);
   const setHasSeenOnboarding = useStore((state) => state.setHasSeenOnboarding);
+  const userProfile = useStore((state) => state.userProfile);
+  const setUserProfile = useStore((state) => state.setUserProfile);
+
+  const isSignedIn = userProfile != null && (userProfile.name != null || userProfile.email != null);
 
   const [localUserId, setLocalUserId] = useState(userId);
   const [notifications, setNotifications] = useState({
@@ -24,6 +28,12 @@ export const Settings = () => {
   };
 
   const handleBackToSignIn = () => {
+    setHasSeenOnboarding(false);
+  };
+
+  const handleSignOut = () => {
+    setUserProfile({ name: undefined, email: undefined });
+    setUserId('test_user');
     setHasSeenOnboarding(false);
   };
 
@@ -43,20 +53,38 @@ export const Settings = () => {
           <User className={iconClass} />
           <h3 className="text-lg font-semibold text-black">Account</h3>
         </div>
-        <div>
-          <label className={labelClass}>User ID</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={localUserId}
-              onChange={(e) => setLocalUserId(e.target.value)}
-              className={inputClass}
-            />
-            <button onClick={handleSaveUserId} className={btnClass}>
-              Save
-            </button>
+        {isSignedIn ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-[#888] mb-0.5">Name</p>
+              <p className="text-sm font-medium text-black">{userProfile!.name ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[#888] mb-0.5">Email</p>
+              <p className="text-sm font-medium text-black">{userProfile!.email ?? '—'}</p>
+            </div>
+            <div className="pt-2">
+              <button onClick={handleSignOut} className={btnClass}>
+                Sign out
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div>
+            <label className={labelClass}>User ID</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={localUserId}
+                onChange={(e) => setLocalUserId(e.target.value)}
+                className={inputClass}
+              />
+              <button onClick={handleSaveUserId} className={btnClass}>
+                Save
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className={sectionClass}>
@@ -122,15 +150,17 @@ export const Settings = () => {
           <p><span className="font-medium text-black">Version:</span> 1.0.0</p>
           <p><span className="font-medium text-black">Project:</span> UC Berkeley MIDS Capstone</p>
           <p><span className="font-medium text-black">Data sources:</span> FDA & USDA Recall APIs</p>
-          <div className="pt-4 border-t border-black/10">
-            <button
-              onClick={handleBackToSignIn}
-              className="text-sm font-medium text-[#888] hover:text-black transition-colors"
-            >
-              Sign in or create account
-            </button>
-            <p className="text-xs text-[#888] mt-1">Return to the sign-in page to create an account.</p>
-          </div>
+          {!isSignedIn && (
+            <div className="pt-4 border-t border-black/10">
+              <button
+                onClick={handleBackToSignIn}
+                className="text-sm font-medium text-[#888] hover:text-black transition-colors"
+              >
+                Sign in or create account
+              </button>
+              <p className="text-xs text-[#888] mt-1">Return to the sign-in page to create an account.</p>
+            </div>
+          )}
         </div>
       </section>
     </div>
