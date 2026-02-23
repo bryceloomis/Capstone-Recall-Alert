@@ -1,9 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+import asyncio
+import re
 import bcrypt
+import boto3
+import requests as req
 from database import test_connection, execute_query
 
 app = FastAPI(title="Food Recall Alert API")
@@ -339,6 +343,172 @@ async def login_user(credentials: UserLogin):
             "email":      user["email"],
             "created_at": str(user["created_at"]),
         }
+    }
+
+
+# ── Receipt Scanning ──────────────────────────────────────────────────────────
+
+def _parse_textract_expense(response: dict) -> list[str]:
+    """Extract product line-item names from Textract AnalyzeExpense response."""
+    items = []
+    for doc in response.get("ExpenseDocuments", []):
+        for group in doc.get("LineItemGroups", []):
+            for line in group.get("LineItems", []):
+                for field in line.get("LineItemExpenseFields", []):
+                    if field.get("Type", {}).get("Text") == "ITEM":
+                        text = (field.get("ValueDetection") or {}).get("Text", "").strip()
+                        if text:
+                            items.append(text)
+    return items
+
+
+def _parse_textract_text_fallback(response: dict) -> list[str]:
+    """Fallback: extract all text lines from DetectDocumentText response."""
+    return [
+        b["Text"]
+        for b in response.get("Blocks", [])
+        if b.get("BlockType") == "LINE" and b.get("Text", "").strip()
+    ]
+
+
+def clean_receipt_item(raw: str) -> str:
+    """
+    Clean a raw receipt line item into a search-friendly product name.
+
+    # TODO: Upgrade to LLM for much better accuracy when an API key is available:
+    #
+    #   import anthropic
+    #   client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    #   msg = client.messages.create(
+    #       model="claude-haiku-20240307",
+    #       max_tokens=40,
+    #       messages=[{"role": "user", "content":
+    #           f"Receipt line item: '{raw}'. What food product is this? Reply with just the clean product name."}]
+    #   )
+    #   return msg.content[0].text.strip()
+    """
+    text = raw.strip()
+    # Remove prices: $3.99 or 3.99
+    text = re.sub(r"\$?\d+\.\d{2}", "", text)
+    # Remove quantity prefix: "2 @ ", "3x ", "1 X "
+    text = re.sub(r"^\d+\s*[xX@]\s*", "", text)
+    text = re.sub(r"^\d+\s+", "", text)
+    # Remove trailing weight/count units
+    text = re.sub(r"\s+\d+(\.\d+)?\s*(LB|OZ|EA|CT|PK|LT|ML|G|KG)?\s*$", "", text, flags=re.IGNORECASE)
+    # Drop short all-caps SKU tokens (e.g. "F3A", "BOGO", "PLU")
+    words = [
+        w for w in text.split()
+        if not (re.match(r"^[A-Z0-9]{2,6}$", w) and len(w) <= 5)
+    ]
+    return " ".join(words).strip()
+
+
+def _search_off_sync(query: str) -> Optional[dict]:
+    """Search Open Food Facts by product name (blocking – run in thread)."""
+    if not query or len(query) < 3:
+        return None
+    try:
+        resp = req.get(
+            "https://world.openfoodfacts.org/cgi/search.pl",
+            params={
+                "search_terms": query,
+                "json": "1",
+                "page_size": "3",
+                "fields": "code,product_name,brands,ingredients_text",
+            },
+            timeout=7,
+        )
+        data = resp.json()
+        products = data.get("products", [])
+        if not products:
+            return None
+        p = products[0]
+        name = (p.get("product_name") or "").strip()
+        if not name:
+            return None
+        brand = (p.get("brands") or "").split(",")[0].strip()
+        ingredients_raw = p.get("ingredients_text") or ""
+        ingredients = [i.strip() for i in ingredients_raw.split(",") if i.strip()][:15]
+        return {
+            "upc": p.get("code", ""),
+            "product_name": name,
+            "brand_name": brand,
+            "ingredients": ingredients,
+        }
+    except Exception:
+        return None
+
+
+@app.post("/api/receipt/scan")
+async def scan_receipt(file: UploadFile = File(...)):
+    """
+    Process a receipt photo:
+      1. AWS Textract AnalyzeExpense  → structured line items
+      2. Regex cleaner (LLM-ready stub) → human-readable product names
+      3. Open Food Facts search (parallel) → product matches
+    Returns: { matched: [...], unmatched: [...], total_lines: N }
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty file uploaded.")
+
+    # 1. AWS Textract – uses EC2 IAM role, no credentials in code
+    try:
+        textract = boto3.client("textract", region_name="us-east-1")
+        expense_response = textract.analyze_expense(Document={"Bytes": image_bytes})
+        raw_items = _parse_textract_expense(expense_response)
+
+        # Fallback: if AnalyzeExpense found no line items, try plain text detection
+        if not raw_items:
+            text_response = textract.detect_document_text(Document={"Bytes": image_bytes})
+            raw_items = _parse_textract_text_fallback(text_response)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Textract error: {str(e)}. Check EC2 IAM role has textract:AnalyzeExpense permission."
+        )
+
+    # 2. Clean item names (regex stub; swap in LLM call here)
+    cleaned_items = []
+    for raw in raw_items[:20]:   # Cap at 20 items to limit API calls
+        cleaned = clean_receipt_item(raw)
+        if cleaned:
+            cleaned_items.append({"raw": raw, "cleaned": cleaned})
+
+    if not cleaned_items:
+        return {"matched": [], "unmatched": [], "total_lines": len(raw_items)}
+
+    # 3. Search Open Food Facts in parallel (asyncio.to_thread wraps sync requests)
+    async def lookup(entry: dict) -> tuple[dict, Optional[dict]]:
+        result = await asyncio.to_thread(_search_off_sync, entry["cleaned"])
+        return entry, result
+
+    search_tasks = [lookup(entry) for entry in cleaned_items]
+    results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    matched = []
+    unmatched = []
+
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        entry, product = result
+        if product and product.get("product_name"):
+            matched.append({
+                "raw_text":     entry["raw"],
+                "cleaned_text": entry["cleaned"],
+                "upc":          product["upc"],
+                "product_name": product["product_name"],
+                "brand_name":   product["brand_name"],
+                "ingredients":  product["ingredients"],
+            })
+        else:
+            unmatched.append(entry["raw"])
+
+    return {
+        "matched":     matched,
+        "unmatched":   unmatched,
+        "total_lines": len(raw_items),
     }
 
 

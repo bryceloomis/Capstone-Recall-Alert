@@ -225,6 +225,45 @@ export async function lookupByUPC(upc: string): Promise<Product> {
   };
 }
 
+// ── Receipt scanning ──────────────────────────────────────────────────────────
+
+export interface ReceiptMatchedProduct {
+  raw_text: string;
+  cleaned_text: string;
+  upc: string;
+  product_name: string;
+  brand_name: string;
+  ingredients: string[];
+}
+
+export interface ReceiptScanResult {
+  matched: ReceiptMatchedProduct[];
+  unmatched: string[];
+  total_lines: number;
+}
+
+/**
+ * Upload a receipt image for OCR + product matching.
+ * Returns matched products (UPC, name, brand, ingredients) and unmatched lines.
+ */
+export async function scanReceipt(file: File): Promise<ReceiptScanResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${API_BASE}/api/receipt/scan`, {
+    method: 'POST',
+    body: formData,
+    // No Content-Type header — browser sets multipart boundary automatically
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error((err as { detail?: string }).detail ?? 'Receipt scan failed');
+  }
+
+  return res.json() as Promise<ReceiptScanResult>;
+}
+
 export interface AuthUser {
   id: number;
   name: string;
