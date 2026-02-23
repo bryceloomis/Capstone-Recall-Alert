@@ -3,21 +3,53 @@
  */
 import { useState } from 'react';
 import { useStore } from './store';
+import { registerUser, loginUser } from './api';
 
 export function Onboarding() {
   const setHasSeenOnboarding = useStore((s) => s.setHasSeenOnboarding);
+  const setUserId = useStore((s) => s.setUserId);
+  const setUserProfile = useStore((s) => s.setUserProfile);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const handleSkip = () => {
     setHasSeenOnboarding(true);
   };
 
-  const handleCreateAccount = (e: React.FormEvent) => {
+  const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Not functional yet – just skip into the app for now
-    setHasSeenOnboarding(true);
+    if (!name || !email || !password) {
+      setError('Please fill in all fields.');
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const user = await registerUser(name, email, password);
+      setUserId(String(user.id));
+      setUserProfile({ name: user.name, email: user.email });
+      setHasSeenOnboarding(true);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      // If account already exists, try logging in instead
+      if (msg?.includes('already exists')) {
+        try {
+          const user = await loginUser(email, password);
+          setUserId(String(user.id));
+          setUserProfile({ name: user.name, email: user.email });
+          setHasSeenOnboarding(true);
+        } catch {
+          setError('Account exists but password is incorrect. Please try again.');
+        }
+      } else {
+        setError(msg ?? 'Something went wrong. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const inputClass =
@@ -56,11 +88,15 @@ export function Onboarding() {
             placeholder="Password"
             className={inputClass}
           />
+          {error && (
+            <p className="text-red-500 text-sm">{error}</p>
+          )}
           <button
             type="submit"
-            className="w-full py-3 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200"
+            disabled={loading}
+            className="w-full py-3 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200 disabled:opacity-50"
           >
-            Create account
+            {loading ? 'Creating account...' : 'Create account'}
           </button>
         </form>
 

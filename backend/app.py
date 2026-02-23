@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import csv
 from datetime import datetime
+import bcrypt
 from database import test_connection, execute_query
 
 app = FastAPI(title="Food Recall Alert API")
@@ -37,6 +38,15 @@ class UserCartItem(BaseModel):
     product_name: str
     brand_name: str
     added_date: str
+
+class UserRegister(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
 
 # In-memory data stores (will be replaced with RDS later)
 recalls_db = []
@@ -228,6 +238,70 @@ async def remove_from_cart(user_id: str, upc: str):
         "message": "Item removed from cart",
         "cart_count": len(user_carts[user_id])
     }
+
+@app.post("/api/users/register")
+async def register_user(user: UserRegister):
+    """Create a new user account with a hashed password."""
+    # Check if email already exists
+    existing = execute_query(
+        "SELECT id FROM users WHERE email = %s;",
+        (user.email,)
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    # Hash the password
+    password_hash = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
+
+    # Insert user into DB
+    result = execute_query(
+        """
+        INSERT INTO users (name, email, password_hash)
+        VALUES (%s, %s, %s)
+        RETURNING id, name, email, created_at;
+        """,
+        (user.name, user.email, password_hash)
+    )
+    new_user = result[0]
+    return {
+        "message": "Account created successfully.",
+        "user": {
+            "id": new_user["id"],
+            "name": new_user["name"],
+            "email": new_user["email"],
+            "created_at": str(new_user["created_at"]),
+        }
+    }
+
+
+@app.post("/api/users/login")
+async def login_user(credentials: UserLogin):
+    """Verify email + password and return the user record."""
+    result = execute_query(
+        "SELECT id, name, email, password_hash, created_at FROM users WHERE email = %s;",
+        (credentials.email,)
+    )
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    user = result[0]
+    password_matches = bcrypt.checkpw(
+        credentials.password.encode(),
+        user["password_hash"].encode()
+    )
+    if not password_matches:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    return {
+        "message": "Login successful.",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+            "created_at": str(user["created_at"]),
+        }
+    }
+
 
 @app.get("/api/db-test")
 async def db_test():

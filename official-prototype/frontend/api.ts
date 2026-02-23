@@ -168,4 +168,28 @@ export const removeFromCart = async (userId: string, upc: string) => {
   return data;
 };
 
+export interface AuthUser {
+  id: number;
+  name: string;
+  email: string;
+  created_at: string;
+}
+
+export const registerUser = async (name: string, email: string, password: string): Promise<AuthUser> => {
+  const { data } = await api.post<{ message: string; user: AuthUser }>('/api/users/register', {
+    name,
+    email,
+    password,
+  });
+  return data.user;
+};
+
+export const loginUser = async (email: string, password: string): Promise<AuthUser> => {
+  const { data } = await api.post<{ message: string; user: AuthUser }>('/api/users/login', {
+    email,
+    password,
+  });
+  return data.user;
+};
+
 export default api;
