@@ -4,10 +4,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 import asyncio
+import io
 import re
 import bcrypt
 import boto3
 import requests as req
+from PIL import Image
 from database import test_connection, execute_query
 
 app = FastAPI(title="Food Recall Alert API")
@@ -451,6 +453,17 @@ async def scan_receipt(file: UploadFile = File(...)):
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty file uploaded.")
+
+    # Normalize to JPEG — Textract only accepts JPEG and PNG.
+    # Many phones save images as WebP (even with .jpg extension), HEIC, etc.
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.format not in ("JPEG", "PNG"):
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=90)
+            image_bytes = buf.getvalue()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read image: {e}")
 
     # 1. AWS Textract – uses EC2 IAM role, no credentials in code
     try:
