@@ -1,17 +1,33 @@
-# Backend integration
+# Backend App (Merged)
 
-This folder holds snippets to **merge into your existing FastAPI app** (App 1).
+This is the **complete working backend** — teammate's original FastAPI app + Akshita's FDA recall and S3 upload integrations.
 
-## FDA Recall API (`fda_recalls.py`)
+## What's included
 
-Add the route from `fda_recalls.py` so the React frontend can query FDA openFDA enforcement data (by UPC or product name). Run server-side so you can cache/refresh daily.
+| Source | What |
+|--------|------|
+| Teammate's `backend/app.py` | Core API: search, cart, recalls, health check |
+| Akshita's `fda_recalls.py` | `GET /api/recalls/fda` — queries FDA openFDA |
+| Akshita's `s3_upload.py` | `POST /api/upload-image` — uploads to S3 |
 
-**Merge:** `pip install httpx`, then copy the `check_fda_recalls` function and add `@app.get("/api/recalls/fda")` as shown in the file. Optionally add caching (e.g. 24h TTL).
+## Run locally
 
-## S3 upload (`s3_upload.py`)
+```bash
+cd official-prototype/backend-app
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
 
-Use for product/scan images or other file uploads. Uploads go to bucket `food-recall-app-data` under `scans/`.
+Server starts at **http://localhost:8000**. The app looks for CSV data files in `../data/`.
 
-**Merge:** `pip install boto3 python-multipart`, set AWS credentials (env or IAM), create the bucket, then add the `upload_scan_image` helper and `@app.post("/api/upload-image")` with `File(...)` as in the snippet.
+## Then run the frontend
 
-**Static frontend hosting:** After `npm run build`, upload the contents of `dist/` to an S3 bucket with **static website hosting** enabled. Point your domain or bucket URL to the app.
+```bash
+cd official-prototype/frontend
+npm install
+npm run dev
+```
+
+Opens at **http://localhost:5173**, proxies `/api/*` to the backend.
