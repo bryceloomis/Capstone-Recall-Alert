@@ -1,7 +1,7 @@
 # Food Recall Alert - Database Access Guide
 
-**Last Updated:** February 17, 2026  
-**For:** Capstone Team Members  
+**Last Updated:** February 23, 2026
+**For:** Capstone Team Members
 **Purpose:** Access our PostgreSQL database using DBeaver
 
 ---
@@ -20,7 +20,7 @@ Our project uses **AWS RDS PostgreSQL** to store:
 
 ### For Mac Users:
 1. Go to https://dbeaver.io/download/
-2. Click **"macOS"** 
+2. Click **"macOS"**
 3. Download the `.dmg` file
 4. Open the `.dmg` file
 5. Drag DBeaver to your Applications folder
@@ -40,63 +40,83 @@ Our project uses **AWS RDS PostgreSQL** to store:
 
 ---
 
-## Step 2: Get Database Connection Information
+## Step 2: Get the Required Files from the Team Lead
 
-**You'll need these credentials from Bryce (or whoever set up the database):**
+You'll need **two things** from Bryce before you can connect:
 
-```
-Host: food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com
-Port: 5432
-Database: food_recall
-Username: postgres
-Password: [ASK TEAM LEAD FOR PASSWORD]
-```
+| What | Details |
+|------|---------|
+| **SSH key file** | `food-recall-keypair.pem` — the private key for the EC2 server |
+| **DB password** | The PostgreSQL password for the `postgres` user |
 
-**⚠️ IMPORTANT:** Keep the password secure! Don't commit it to GitHub or share publicly.
+**⚠️ IMPORTANT:** Keep both of these secure! Never commit them to GitHub or share publicly.
 
 ---
 
 ## Step 3: Connect to Database in DBeaver
 
-### First Time Setup:
+> Our RDS database lives inside a **private AWS network** — it cannot be reached directly from your laptop. DBeaver must tunnel through our EC2 server first. The setup has two parts: the SSH tunnel, then the database credentials.
+
+### 3a. Create a New Connection
 
 1. **Open DBeaver**
-
 2. **Create New Connection:**
    - Click **Database** → **New Database Connection**
    - OR click the plug icon (🔌) in the toolbar
+3. **Select PostgreSQL** and click **Next**
+4. **Enter Connection Details** on the **Main** tab:
 
-3. **Select PostgreSQL:**
-   - Find and click **PostgreSQL** 
-   - Click **Next**
+   | Field | Value |
+   |-------|-------|
+   | Host | `food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com` |
+   | Port | `5432` |
+   | Database | `food_recall` |
+   | Username | `postgres` |
+   | Password | *(ask team lead)* |
 
-4. **Enter Connection Details:**
-   ```
-   Host: food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com
-   Port: 5432
-   Database: food_recall
-   Username: postgres
-   Password: [enter password here]
-   ```
-   
    **☑️ Check** "Save password locally"
 
-5. **Download Drivers (First Time Only):**
-   - Click **Test Connection**
-   - If prompted, click **Download** to get PostgreSQL drivers
-   - Wait for download to complete
-   - Click **Test Connection** again
-   - Should say **"Connected"** ✅
+---
 
-6. **Finish Setup:**
-   - Click **Finish**
-   - You should now see the database in the left sidebar!
+### 3b. Configure the SSH Tunnel ⬅️ *Required — don't skip this!*
+
+> Without this step the connection will time out. The database is in a private network only reachable through the EC2 server.
+
+1. In the same connection dialog, click the **SSH** tab at the top
+2. **Check** "Use SSH Tunnel"
+3. Fill in the SSH settings:
+
+   | Field | Value |
+   |-------|-------|
+   | Host/IP | `98.93.18.139` |
+   | Port | `22` |
+   | Username | `ubuntu` |
+   | Authentication | **Public Key** |
+   | Private Key | Click **Browse** → select your `food-recall-keypair.pem` file |
+
+4. Click **Test tunnel configuration** — it should say **Connected** ✅
+
+   > **Mac/Linux note:** If you get a "bad permissions" error on the `.pem` file, open Terminal and run:
+   > ```bash
+   > chmod 600 ~/Downloads/food-recall-keypair.pem
+   > ```
+   > Then try the tunnel test again.
+
+---
+
+### 3c. Test and Finish
+
+1. Go back to the **Main** tab
+2. Click **Test Connection**
+   - If prompted to download PostgreSQL drivers, click **Download**, wait, then test again
+   - Should say **"Connected"** ✅
+3. Click **Finish**
+
+You should now see the database in the left sidebar!
 
 ---
 
 ## Step 4: Explore the Database
-
-### View Tables:
 
 In the left sidebar, expand:
 ```
@@ -119,8 +139,8 @@ PostgreSQL
 ## Step 5: Run Your First Query
 
 ### Open SQL Editor:
-- Click **SQL Editor** button (top toolbar)
-- OR press **Ctrl + ]** (Mac: **Cmd + ]**)
+- Click the **SQL Editor** button (top toolbar)
+- OR press **Ctrl + `** (Mac: **Cmd + `**)
 
 ### Try These Queries:
 
@@ -136,13 +156,13 @@ SELECT COUNT(*) as total_products FROM products;
 
 **3. Find recalls from a specific brand:**
 ```sql
-SELECT * FROM recalls 
+SELECT * FROM recalls
 WHERE brand_name = '365 Everyday Value';
 ```
 
 **4. See database statistics:**
 ```sql
-SELECT 
+SELECT
     'Recalls' as table_name, COUNT(*) as count FROM recalls
 UNION ALL
 SELECT 'Products', COUNT(*) FROM products
@@ -186,28 +206,14 @@ VALUES ('123456789012', 'Test Product', 'Test Brand', '2026-02-17', 'Testing', '
 
 ## Troubleshooting
 
-### "Connection timeout" or "Can't connect"
-**Solution:** Ask your team lead to add your IP address to the AWS security group.
-
-Send them this message:
-```
-Hey! I'm trying to connect to the database but getting a timeout. 
-Can you add my IP to the security group?
-
-My IP address is: [Go to https://whatismyipaddress.com/ and copy it here]
-```
-
-### "Authentication failed"
-**Solution:** Double-check your password. Make sure you got the correct one from your team lead.
-
-### "Database does not exist"
-**Solution:** Make sure the database name is exactly `food_recall` (with underscore, not hyphen)
-
-### Drivers won't download
-**Solution:** 
-1. Click **Database** → **Driver Manager**
-2. Find **PostgreSQL**
-3. Click **Download/Update**
+| Problem | Fix |
+|---------|-----|
+| SSH tunnel test fails | Make sure you're using `food-recall-keypair.pem` (not `UCB.pem` or another key). On Mac/Linux run `chmod 600 food-recall-keypair.pem` first. |
+| Connection times out after SSH succeeds | Double-check the RDS hostname and database name are spelled exactly as shown |
+| "Password authentication failed" | Ask Bryce for the current password — don't guess |
+| "Bad permissions" on .pem file | Run `chmod 600 ~/path/to/food-recall-keypair.pem` in Terminal |
+| DBeaver asks to download drivers | Click Download and wait — this is normal on first use |
+| Drivers won't download | Click **Database** → **Driver Manager** → find PostgreSQL → click **Download/Update** |
 
 ---
 
@@ -220,10 +226,10 @@ My IP address is: [Go to https://whatismyipaddress.com/ and copy it here]
 - Ask before making major changes
 
 ❌ **DON'T:**
-- Share the password publicly
-- Commit connection details to GitHub
-- Delete data without checking with team
-- Run `DELETE` or `UPDATE` without `WHERE` clause
+- Share the password or `.pem` file publicly
+- Commit connection details or keys to GitHub
+- Delete data without checking with the team
+- Run `DELETE` or `UPDATE` without a `WHERE` clause
 
 ---
 
@@ -249,7 +255,7 @@ SELECT * FROM products LIMIT 10;
 
 ### Join Tables
 ```sql
--- Find users with recalled items
+-- Find users with recalled items in their cart
 SELECT u.email, uc.product_name, r.reason
 FROM users u
 JOIN user_carts uc ON u.id = uc.user_id
@@ -269,56 +275,63 @@ ORDER BY count DESC;
 
 ## Our Database Schema
 
-### Tables Overview:
+### users
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer | Primary key |
+| email | text | Unique |
+| name | text | |
+| created_at | timestamp | |
 
-**users**
-- id (Primary Key)
-- email
-- name
-- created_at
+### products
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer | Primary key |
+| upc | text | Unique |
+| product_name | text | |
+| brand_name | text | |
+| category | text | |
+| ingredients | text[] | Array |
+| image_url | text | |
 
-**products**
-- id (Primary Key)
-- upc (Unique)
-- product_name
-- brand_name
-- category
-- ingredients
-- image_url
+### recalls
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer | Primary key |
+| upc | text | |
+| product_name | text | |
+| brand_name | text | |
+| recall_date | date | |
+| reason | text | |
+| source | text | FDA or USDA |
 
-**recalls**
-- id (Primary Key)
-- upc
-- product_name
-- brand_name
-- recall_date
-- reason
-- source (FDA/USDA)
+### user_carts
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer | Primary key |
+| user_id | integer | → users(id) |
+| product_upc | text | |
+| product_name | text | |
+| brand_name | text | |
+| added_date | timestamp | |
 
-**user_carts**
-- id (Primary Key)
-- user_id → references users(id)
-- product_upc
-- product_name
-- brand_name
-- added_date
-
-**alerts**
-- id (Primary Key)
-- user_id → references users(id)
-- recall_id → references recalls(id)
-- product_upc
-- sent_at
-- viewed
-- email_sent
+### alerts
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer | Primary key |
+| user_id | integer | → users(id) |
+| recall_id | integer | → recalls(id) |
+| product_upc | text | |
+| sent_at | timestamp | |
+| viewed | boolean | |
+| email_sent | boolean | |
 
 ---
 
 ## Getting Help
 
-**Database Access Issues:**
+**Database / SSH Access Issues:**
 - Contact: Bryce (team lead)
-- Need: Your IP address added to security group
 
 **DBeaver Issues:**
 - Official docs: https://dbeaver.com/docs/
