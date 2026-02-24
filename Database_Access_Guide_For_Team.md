@@ -1,22 +1,41 @@
-# Food Recall Alert - Database Access Guide
+Food Recall Alert - Database Access Guide
+Last Updated: February 23, 2026
+For: Capstone Team Members
+Purpose: Access our PostgreSQL database using DBeaver
 
 **Last Updated:** February 23, 2026
 **For:** Capstone Team Members
 **Purpose:** Access our PostgreSQL database using DBeaver
 
----
+Product information (UPCs, names, brands)
+Food recall data (FDA/USDA recalls)
+User accounts and shopping carts
+Alert history
+Step 1: Download and Install DBeaver
+For Mac Users:
 
-## What You're Getting Access To
+Go to https://dbeaver.io/download/
+Click "macOS"
+Download the .dmg file
+Open the .dmg and drag DBeaver to your Applications folder
+Open DBeaver from Applications
+For Windows Users:
 
-Our project uses **AWS RDS PostgreSQL** to store:
-- Product information (UPCs, names, brands)
-- Food recall data (FDA/USDA recalls)
-- User accounts and shopping carts
-- Alert history
+Go to https://dbeaver.io/download/
+Click "Windows (installer)"
+Download and run the installer
+Follow the prompts and launch DBeaver
+For Linux Users:
 
----
+Go to https://dbeaver.io/download/
+Choose your distribution and follow the instructions
+Step 2: Get the Required Files from the Team Lead
+You'll need two things from Bryce before you can connect:
 
-## Step 1: Download and Install DBeaver
+What	Details
+SSH key file	food-recall-keypair.pem — the private key for the EC2 server
+DB password	The PostgreSQL password for the postgres user
+⚠️ Keep both of these secure. Never commit them to GitHub or share publicly.
 
 ### For Mac Users:
 1. Go to https://dbeaver.io/download/
@@ -26,19 +45,12 @@ Our project uses **AWS RDS PostgreSQL** to store:
 5. Drag DBeaver to your Applications folder
 6. Open DBeaver from Applications
 
-### For Windows Users:
-1. Go to https://dbeaver.io/download/
-2. Click **"Windows (installer)"**
-3. Download and run the installer
-4. Follow installation prompts (just click Next/Install)
-5. Launch DBeaver
+3a. Create a New Connection
+Open DBeaver
 
-### For Linux Users:
-1. Go to https://dbeaver.io/download/
-2. Choose your distribution (Ubuntu/Debian/Fedora)
-3. Follow the installation instructions for your distro
+Click Database → New Database Connection (or click the 🔌 plug icon)
 
----
+Select PostgreSQL and click Next
 
 ## Step 2: Get the Required Files from the Team Lead
 
@@ -51,9 +63,9 @@ You'll need **two things** from Bryce before you can connect:
 
 **⚠️ IMPORTANT:** Keep both of these secure! Never commit them to GitHub or share publicly.
 
----
+Check Use SSH Tunnel
 
-## Step 3: Connect to Database in DBeaver
+Fill in the SSH settings:
 
 > Our RDS database lives inside a **private AWS network** — it cannot be reached directly from your laptop. DBeaver must tunnel through our EC2 server first. The setup has two parts: the SSH tunnel, then the database credentials.
 
@@ -119,22 +131,10 @@ You should now see the database in the left sidebar!
 ## Step 4: Explore the Database
 
 In the left sidebar, expand:
-```
-PostgreSQL
-  └─ food_recall
-      └─ Schemas
-          └─ public
-              └─ Tables
-                  ├─ alerts
-                  ├─ products
-                  ├─ recalls
-                  ├─ user_carts
-                  └─ users
-```
 
-**Double-click any table** to see its data!
+food_recall → Schemas → public → Tables
 
----
+You'll find these tables:
 
 ## Step 5: Run Your First Query
 
