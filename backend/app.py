@@ -1,18 +1,45 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+"""
+app.py – FastAPI entry point for the Food Recall Alert API.
+
+Sub-modules (teammates can edit independently):
+  receipt_scan.py  – receipt photo OCR → product matching → recall check
+  recall_update.py – FDA/USDA recall fetch, DB upsert, alert generation,
+                     APScheduler (every 6 hours)
+
+Core endpoints live here:
+  GET  /                              – API overview
+  GET  /api/health                    – live DB counts
+  POST /api/search                    – product search by UPC or name
+  GET  /api/recalls                   – all recalls
+  GET  /api/recalls/check/{upc}       – recall status for a single UPC
+  GET  /api/user/cart/{user_id}       – user's grocery list
+  POST /api/user/cart                 – add item to list
+  DEL  /api/user/cart/{user_id}/{upc} – remove item
+  POST /api/users/register            – create account
+  POST /api/users/login               – sign in
+  GET  /api/db-test                   – dev: DB health + row counts
+
+Sub-module endpoints (imported via router):
+  POST /api/receipt/scan              – receipt_scan.py
+  POST /api/admin/refresh-recalls     – recall_update.py
+"""
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
-import asyncio
-import io
-import re
 import bcrypt
-import boto3
-import requests as req
-from PIL import Image
+
 from database import test_connection, execute_query
 
-app = FastAPI(title="Food Recall Alert API")
+# Sub-module routers
+from receipt_scan  import router as receipt_router
+from recall_update import router as recall_router, start_recall_scheduler
+
+# ── App setup ──────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="Food Recall Alert API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,36 +49,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register sub-module routes
+app.include_router(receipt_router)
+app.include_router(recall_router)
+
+
+# ── Startup event ──────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def on_startup():
+    """Start the recall refresh background scheduler when the server launches."""
+    start_recall_scheduler()
+
+
 # ── Data Models ───────────────────────────────────────────────────────────────
 
 class ProductSearch(BaseModel):
-    upc: Optional[str] = None
+    upc:  Optional[str] = None
     name: Optional[str] = None
 
 class Product(BaseModel):
-    upc: str
+    upc:          str
     product_name: str
-    brand_name: str
-    category: Optional[str] = None
-    ingredients: Optional[str] = None
-    is_recalled: bool = False
-    recall_info: Optional[dict] = None
+    brand_name:   str
+    category:     Optional[str] = None
+    ingredients:  Optional[str] = None
+    is_recalled:  bool = False
+    recall_info:  Optional[dict] = None
 
 class UserCartItem(BaseModel):
-    user_id: str
-    upc: str
+    user_id:      str
+    upc:          str
     product_name: str
-    brand_name: str
-    added_date: str
+    brand_name:   str
+    added_date:   str
 
 class UserRegister(BaseModel):
-    name: str
-    email: str
+    name:     str
+    email:    str
     password: str
 
 class UserLogin(BaseModel):
-    email: str
+    email:    str
     password: str
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,41 +106,46 @@ def format_recall(row: dict) -> dict:
     else:
         hazard = "Class I"
     return {
-        "id":                   row["id"],
-        "upc":                  row["upc"],
-        "product_name":         row["product_name"],
-        "brand_name":           row.get("brand_name") or "",
-        "recall_date":          str(row["recall_date"]),
-        "reason":               row["reason"],
+        "id":                    row["id"],
+        "upc":                   row["upc"],
+        "product_name":          row["product_name"],
+        "brand_name":            row.get("brand_name") or "",
+        "recall_date":           str(row["recall_date"]),
+        "reason":                row["reason"],
         "hazard_classification": hazard,
-        "source":               row.get("source") or "",
-        "firm_name":            row.get("firm_name") or "",
-        "distribution":         row.get("distribution_pattern") or "",
+        "source":                row.get("source") or "",
+        "firm_name":             row.get("firm_name") or "",
+        "distribution":          row.get("distribution_pattern") or "",
     }
 
+
 def _parse_user_id(user_id: str) -> Optional[int]:
-    """Parse user_id string to int; return None for non-numeric ids like 'test_user'."""
+    """Parse user_id string → int. Returns None for guest ids like 'test_user'."""
     try:
         return int(user_id)
     except (ValueError, TypeError):
         return None
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+# ── Core Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
     return {
-        "message": "Food Recall Alert API",
-        "version": "0.2.0",
+        "message":   "Food Recall Alert API",
+        "version":   "0.2.0",
         "endpoints": {
             "/api/health":                  "Health check (live DB counts)",
             "/api/search":                  "POST – search by UPC or name",
             "/api/recalls":                 "GET  – all recalls (newest first)",
+            "/api/recalls/check/{upc}":     "GET  – recall status for one UPC",
             "/api/user/cart/{user_id}":     "GET  – user's saved grocery list",
             "/api/user/cart":               "POST – add item to grocery list",
+            "/api/receipt/scan":            "POST – receipt photo OCR + matching",
+            "/api/admin/refresh-recalls":   "POST – manual recall refresh",
             "/api/users/register":          "POST – create account",
             "/api/users/login":             "POST – sign in",
-        }
+        },
     }
 
 
@@ -111,10 +157,10 @@ async def health_check():
     except Exception:
         products_count = recalls_count = 0
     return {
-        "status":          "healthy",
-        "timestamp":       datetime.now().isoformat(),
-        "products_count":  products_count,
-        "recalls_count":   recalls_count,
+        "status":         "healthy",
+        "timestamp":      datetime.now().isoformat(),
+        "products_count": products_count,
+        "recalls_count":  recalls_count,
     }
 
 
@@ -125,7 +171,7 @@ async def search_product(search: ProductSearch):
     if search.upc:
         rows = execute_query(
             "SELECT * FROM products WHERE upc = %s LIMIT 1;",
-            (search.upc,)
+            (search.upc,),
         )
         if not rows:
             raise HTTPException(status_code=404, detail="Product not found")
@@ -133,7 +179,7 @@ async def search_product(search: ProductSearch):
         product = rows[0]
         recall_rows = execute_query(
             "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-            (search.upc,)
+            (search.upc,),
         )
         recall_info = format_recall(recall_rows[0]) if recall_rows else None
 
@@ -141,13 +187,13 @@ async def search_product(search: ProductSearch):
         ingredients = [i.strip() for i in ingredients_raw.split("|") if i.strip()]
 
         return {
-            "upc":           product["upc"],
-            "product_name":  product["product_name"],
-            "brand_name":    product["brand_name"],
-            "category":      product.get("category") or "Unknown",
-            "ingredients":   ingredients,
-            "is_recalled":   recall_info is not None,
-            "recall_info":   recall_info,
+            "upc":          product["upc"],
+            "product_name": product["product_name"],
+            "brand_name":   product["brand_name"],
+            "category":     product.get("category") or "Unknown",
+            "ingredients":  ingredients,
+            "is_recalled":  recall_info is not None,
+            "recall_info":  recall_info,
         }
 
     elif search.name:
@@ -159,7 +205,7 @@ async def search_product(search: ProductSearch):
             ORDER BY product_name
             LIMIT 10;
             """,
-            (pattern, pattern)
+            (pattern, pattern),
         )
         if not rows:
             raise HTTPException(status_code=404, detail="No products found")
@@ -168,7 +214,7 @@ async def search_product(search: ProductSearch):
         for product in rows:
             recall_rows = execute_query(
                 "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-                (product["upc"],)
+                (product["upc"],),
             )
             recall_info = format_recall(recall_rows[0]) if recall_rows else None
             results.append({
@@ -198,25 +244,23 @@ async def get_all_recalls():
 
 @app.get("/api/recalls/check/{upc}")
 async def check_recall_for_upc(upc: str):
-    """Check whether a specific UPC has an active recall.
-    Called by the barcode scanner so every scan gets a recall check
-    even if the product isn't in our products table.
-    """
+    """Check whether a specific UPC has an active recall."""
     rows = execute_query(
         "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-        (upc,)
+        (upc,),
     )
     if rows:
         return {"is_recalled": True, "recall_info": format_recall(rows[0])}
     return {"is_recalled": False, "recall_info": None}
 
 
+# ── Cart ───────────────────────────────────────────────────────────────────────
+
 @app.get("/api/user/cart/{user_id}")
 async def get_user_cart(user_id: str):
     """Return all items in a user's saved grocery list from RDS."""
     uid = _parse_user_id(user_id)
     if uid is None:
-        # Guest / not logged in — return empty so frontend uses local Zustand state
         return {"user_id": user_id, "cart": [], "count": 0}
 
     rows = execute_query(
@@ -226,7 +270,7 @@ async def get_user_cart(user_id: str):
         WHERE user_id = %s
         ORDER BY added_date DESC;
         """,
-        (uid,)
+        (uid,),
     )
     cart = [
         {
@@ -254,7 +298,7 @@ async def add_to_cart(item: UserCartItem):
         ON CONFLICT (user_id, product_upc) DO NOTHING
         RETURNING product_upc AS upc, product_name, brand_name, added_date;
         """,
-        (uid, item.upc, item.product_name, item.brand_name)
+        (uid, item.upc, item.product_name, item.brand_name),
     )
 
     if not result:
@@ -281,11 +325,11 @@ async def remove_from_cart(user_id: str, upc: str):
 
     execute_query(
         "DELETE FROM user_carts WHERE user_id = %s AND product_upc = %s;",
-        (uid, upc)
+        (uid, upc),
     )
     count_result = execute_query(
         "SELECT COUNT(*) AS total FROM user_carts WHERE user_id = %s;",
-        (uid,)
+        (uid,),
     )
     return {
         "message":    "Item removed",
@@ -293,7 +337,7 @@ async def remove_from_cart(user_id: str, upc: str):
     }
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth ───────────────────────────────────────────────────────────────────────
 
 @app.post("/api/users/register")
 async def register_user(user: UserRegister):
@@ -309,7 +353,7 @@ async def register_user(user: UserRegister):
         VALUES (%s, %s, %s)
         RETURNING id, name, email, created_at;
         """,
-        (user.name, user.email, password_hash)
+        (user.name, user.email, password_hash),
     )
     new_user = result[0]
     return {
@@ -319,7 +363,7 @@ async def register_user(user: UserRegister):
             "name":       new_user["name"],
             "email":      new_user["email"],
             "created_at": str(new_user["created_at"]),
-        }
+        },
     }
 
 
@@ -328,7 +372,7 @@ async def login_user(credentials: UserLogin):
     """Verify email + password and return the user record."""
     result = execute_query(
         "SELECT id, name, email, password_hash, created_at FROM users WHERE email = %s;",
-        (credentials.email,)
+        (credentials.email,),
     )
     if not result:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
@@ -344,188 +388,11 @@ async def login_user(credentials: UserLogin):
             "name":       user["name"],
             "email":      user["email"],
             "created_at": str(user["created_at"]),
-        }
+        },
     }
 
 
-# ── Receipt Scanning ──────────────────────────────────────────────────────────
-
-def _parse_textract_expense(response: dict) -> list[str]:
-    """Extract product line-item names from Textract AnalyzeExpense response."""
-    items = []
-    for doc in response.get("ExpenseDocuments", []):
-        for group in doc.get("LineItemGroups", []):
-            for line in group.get("LineItems", []):
-                for field in line.get("LineItemExpenseFields", []):
-                    if field.get("Type", {}).get("Text") == "ITEM":
-                        text = (field.get("ValueDetection") or {}).get("Text", "").strip()
-                        if text:
-                            items.append(text)
-    return items
-
-
-def _parse_textract_text_fallback(response: dict) -> list[str]:
-    """Fallback: extract all text lines from DetectDocumentText response."""
-    return [
-        b["Text"]
-        for b in response.get("Blocks", [])
-        if b.get("BlockType") == "LINE" and b.get("Text", "").strip()
-    ]
-
-
-def clean_receipt_item(raw: str) -> str:
-    """
-    Clean a raw receipt line item into a search-friendly product name.
-
-    # TODO: Upgrade to LLM for much better accuracy when an API key is available:
-    #
-    #   import anthropic
-    #   client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    #   msg = client.messages.create(
-    #       model="claude-haiku-20240307",
-    #       max_tokens=40,
-    #       messages=[{"role": "user", "content":
-    #           f"Receipt line item: '{raw}'. What food product is this? Reply with just the clean product name."}]
-    #   )
-    #   return msg.content[0].text.strip()
-    """
-    text = raw.strip()
-    # Remove prices: $3.99 or 3.99
-    text = re.sub(r"\$?\d+\.\d{2}", "", text)
-    # Remove quantity prefix: "2 @ ", "3x ", "1 X "
-    text = re.sub(r"^\d+\s*[xX@]\s*", "", text)
-    text = re.sub(r"^\d+\s+", "", text)
-    # Remove trailing weight/count units
-    text = re.sub(r"\s+\d+(\.\d+)?\s*(LB|OZ|EA|CT|PK|LT|ML|G|KG)?\s*$", "", text, flags=re.IGNORECASE)
-    # Drop short all-caps SKU tokens (e.g. "F3A", "BOGO", "PLU")
-    words = [
-        w for w in text.split()
-        if not (re.match(r"^[A-Z0-9]{2,6}$", w) and len(w) <= 5)
-    ]
-    return " ".join(words).strip()
-
-
-def _search_off_sync(query: str) -> Optional[dict]:
-    """Search Open Food Facts by product name (blocking – run in thread)."""
-    if not query or len(query) < 3:
-        return None
-    try:
-        resp = req.get(
-            "https://world.openfoodfacts.org/cgi/search.pl",
-            params={
-                "search_terms": query,
-                "json": "1",
-                "page_size": "3",
-                "fields": "code,product_name,brands,ingredients_text",
-            },
-            timeout=7,
-        )
-        data = resp.json()
-        products = data.get("products", [])
-        if not products:
-            return None
-        p = products[0]
-        name = (p.get("product_name") or "").strip()
-        if not name:
-            return None
-        brand = (p.get("brands") or "").split(",")[0].strip()
-        ingredients_raw = p.get("ingredients_text") or ""
-        ingredients = [i.strip() for i in ingredients_raw.split(",") if i.strip()][:15]
-        return {
-            "upc": p.get("code", ""),
-            "product_name": name,
-            "brand_name": brand,
-            "ingredients": ingredients,
-        }
-    except Exception:
-        return None
-
-
-@app.post("/api/receipt/scan")
-async def scan_receipt(file: UploadFile = File(...)):
-    """
-    Process a receipt photo:
-      1. AWS Textract AnalyzeExpense  → structured line items
-      2. Regex cleaner (LLM-ready stub) → human-readable product names
-      3. Open Food Facts search (parallel) → product matches
-    Returns: { matched: [...], unmatched: [...], total_lines: N }
-    """
-    image_bytes = await file.read()
-    if not image_bytes:
-        raise HTTPException(status_code=400, detail="Empty file uploaded.")
-
-    # Normalize to JPEG — Textract only accepts JPEG and PNG.
-    # Many phones save images as WebP (even with .jpg extension), HEIC, etc.
-    try:
-        img = Image.open(io.BytesIO(image_bytes))
-        if img.format not in ("JPEG", "PNG"):
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=90)
-            image_bytes = buf.getvalue()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not read image: {e}")
-
-    # 1. AWS Textract – uses EC2 IAM role, no credentials in code
-    try:
-        textract = boto3.client("textract", region_name="us-east-1")
-        expense_response = textract.analyze_expense(Document={"Bytes": image_bytes})
-        raw_items = _parse_textract_expense(expense_response)
-
-        # Fallback: if AnalyzeExpense found no line items, try plain text detection
-        if not raw_items:
-            text_response = textract.detect_document_text(Document={"Bytes": image_bytes})
-            raw_items = _parse_textract_text_fallback(text_response)
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Textract error: {str(e)}. Check EC2 IAM role has textract:AnalyzeExpense permission."
-        )
-
-    # 2. Clean item names (regex stub; swap in LLM call here)
-    cleaned_items = []
-    for raw in raw_items[:20]:   # Cap at 20 items to limit API calls
-        cleaned = clean_receipt_item(raw)
-        if cleaned:
-            cleaned_items.append({"raw": raw, "cleaned": cleaned})
-
-    if not cleaned_items:
-        return {"matched": [], "unmatched": [], "total_lines": len(raw_items)}
-
-    # 3. Search Open Food Facts in parallel (asyncio.to_thread wraps sync requests)
-    async def lookup(entry: dict) -> tuple[dict, Optional[dict]]:
-        result = await asyncio.to_thread(_search_off_sync, entry["cleaned"])
-        return entry, result
-
-    search_tasks = [lookup(entry) for entry in cleaned_items]
-    results = await asyncio.gather(*search_tasks, return_exceptions=True)
-
-    matched = []
-    unmatched = []
-
-    for result in results:
-        if isinstance(result, Exception):
-            continue
-        entry, product = result
-        if product and product.get("product_name"):
-            matched.append({
-                "raw_text":     entry["raw"],
-                "cleaned_text": entry["cleaned"],
-                "upc":          product["upc"],
-                "product_name": product["product_name"],
-                "brand_name":   product["brand_name"],
-                "ingredients":  product["ingredients"],
-            })
-        else:
-            unmatched.append(entry["raw"])
-
-    return {
-        "matched":     matched,
-        "unmatched":   unmatched,
-        "total_lines": len(raw_items),
-    }
-
-
-# ── Dev / debug ───────────────────────────────────────────────────────────────
+# ── Dev / debug ────────────────────────────────────────────────────────────────
 
 @app.get("/api/db-test")
 async def db_test():
@@ -533,18 +400,18 @@ async def db_test():
     if not test_connection():
         raise HTTPException(status_code=503, detail="Cannot connect to database.")
 
-    tables = ["users", "products", "recalls", "user_carts", "alerts"]
+    tables  = ["users", "products", "recalls", "user_carts", "alerts"]
     summary = {}
     for table in tables:
         try:
-            rows        = execute_query(f"SELECT * FROM {table} LIMIT 5;")
-            count_row   = execute_query(f"SELECT COUNT(*) AS total FROM {table};")
+            rows      = execute_query(f"SELECT * FROM {table} LIMIT 5;")
+            count_row = execute_query(f"SELECT COUNT(*) AS total FROM {table};")
             summary[table] = {
                 "total_rows":  count_row[0]["total"] if count_row else 0,
                 "sample_rows": rows,
             }
-        except Exception as e:
-            summary[table] = {"error": str(e)}
+        except Exception as exc:
+            summary[table] = {"error": str(exc)}
 
     return {
         "db_connected": True,
@@ -553,6 +420,8 @@ async def db_test():
         "tables":       summary,
     }
 
+
+# ── Run locally ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
