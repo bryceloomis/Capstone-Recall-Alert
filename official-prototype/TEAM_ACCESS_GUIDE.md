@@ -1,36 +1,30 @@
 # Team Access Guide — Recall Alert
 
 This guide covers how to SSH into the EC2 instance and access JupyterLab.
-**Get the `.pem` key file from Bryce** — never commit it to the repo.
+**Never commit the `.pem` key file to the repo.**
 
 ---
 
 ## 1. SSH into the EC2 Instance
 
 ### Prerequisites
-- The `.pem` key file: `food-recall-keypair.pem`
-  *(get this from Bryce via Slack/Drive — do not commit it)*
+- The `.pem` key file — download it here (UC Berkeley Google account required):
+  **[⬇ Download food-recall-keypair.pem](https://drive.google.com/file/d/1GyEW8VgK9Uc8H7Rp8y4_1K4FazIZYPuV/view?usp=sharing)**
 - On **Mac/Linux**: no extra software needed
 - On **Windows**: use [Git Bash](https://gitforwindows.org/) or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) — both support the same commands below
 
 ### One-time setup (Mac/Linux)
 ```bash
 # Fix permissions on the key file (required — SSH will refuse to use it otherwise)
-chmod 400 /path/to/food-recall-keypair.pem
+chmod 400 ~/Downloads/food-recall-keypair.pem
 ```
 
 ### Connect
 ```bash
-ssh -i /path/to/food-recall-keypair.pem ubuntu@98.93.18.139
-```
-
-Replace `/path/to/food-recall-keypair.pem` with wherever you saved the key.
-
-**Example (Mac, key saved in Downloads):**
-```bash
-chmod 400 ~/Downloads/food-recall-keypair.pem
 ssh -i ~/Downloads/food-recall-keypair.pem ubuntu@98.93.18.139
 ```
+
+If you saved the `.pem` somewhere other than `~/Downloads`, replace the path accordingly.
 
 ### What you'll see
 Once connected, your prompt will change to something like:
@@ -70,7 +64,7 @@ You access it by forwarding the port through your SSH connection.
 ### Step 1 — Open the SSH tunnel
 In a terminal, run:
 ```bash
-ssh -i /path/to/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@98.93.18.139
+ssh -i ~/Downloads/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@98.93.18.139
 ```
 The `-L 8888:localhost:8888` flag forwards port 8888 from the EC2 to your machine.
 **Keep this terminal open** — closing it closes the tunnel.
@@ -184,8 +178,8 @@ python -c "from database import test_connection; test_connection()"
 
 | Task | Command |
 |------|---------|
-| SSH into EC2 | `ssh -i food-recall-keypair.pem ubuntu@98.93.18.139` |
-| SSH + Jupyter tunnel | `ssh -i food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@98.93.18.139` |
+| SSH into EC2 | `ssh -i ~/Downloads/food-recall-keypair.pem ubuntu@98.93.18.139` |
+| SSH + Jupyter tunnel | `ssh -i ~/Downloads/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@98.93.18.139` |
 | Start JupyterLab | `bash ~/start_jupyter.sh` |
 | Activate venv | `source ~/Capstone-Recall-Alert/backend/venv/bin/activate` |
 | Trigger recall refresh | `curl -X POST http://localhost:8000/api/admin/refresh-recalls` |
