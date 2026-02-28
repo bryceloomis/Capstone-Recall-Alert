@@ -68,7 +68,7 @@ You'll need **two things** from Bryce before you can connect:
 
    | Field | Value |
    |-------|-------|
-   | Host | `food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com` |
+   | Host | `food-recall-db.cqjm48os4obt.us-east-1.rds.amazonaws.com` |
    | Port | `5432` |
    | Database | `food_recall` |
    | Username | `postgres` |
@@ -88,7 +88,7 @@ You'll need **two things** from Bryce before you can connect:
 
    | Field | Value |
    |-------|-------|
-   | Host/IP | `98.93.18.139` |
+   | Host/IP | `54.210.208.14` |
    | Port | `22` |
    | Username | `ubuntu` |
    | Authentication | **Public Key** |
