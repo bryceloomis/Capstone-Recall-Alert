@@ -10,7 +10,7 @@ The backend connects to **AWS RDS PostgreSQL** for products, recalls, users, and
 
 | Setting   | Value (for backend config only) |
 |----------|----------------------------------|
-| Host     | `food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com` |
+| Host     | `food-recall-db.cqjm48os4obt.us-east-1.rds.amazonaws.com` |
 | Port     | `5432` |
 | Database | `food_recall` |
 | Username | `postgres` |

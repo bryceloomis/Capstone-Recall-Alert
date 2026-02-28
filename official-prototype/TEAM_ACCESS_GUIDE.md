@@ -21,7 +21,7 @@ chmod 400 ~/Downloads/food-recall-keypair.pem
 
 ### Connect
 ```bash
-ssh -i ~/Downloads/food-recall-keypair.pem ubuntu@98.93.18.139
+ssh -i ~/Downloads/food-recall-keypair.pem ubuntu@54.210.208.14
 ```
 
 If you saved the `.pem` somewhere other than `~/Downloads`, replace the path accordingly.
@@ -64,7 +64,7 @@ You access it by forwarding the port through your SSH connection.
 ### Step 1 — Open the SSH tunnel
 In a terminal, run:
 ```bash
-ssh -i ~/Downloads/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@98.93.18.139
+ssh -i ~/Downloads/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@54.210.208.14
 ```
 The `-L 8888:localhost:8888` flag forwards port 8888 from the EC2 to your machine.
 **Keep this terminal open** — closing it closes the tunnel.
@@ -122,7 +122,7 @@ pip freeze > ~/Capstone-Recall-Alert/backend/requirements.txt   # update require
 
 The FastAPI backend is served by gunicorn and accessible at:
 ```
-http://98.93.18.139:8000
+http://54.210.208.14:8000
 ```
 Or internally on EC2:
 ```
@@ -158,7 +158,7 @@ The backend connects automatically using environment variables. If you need dire
 
 | Setting  | Value |
 |----------|-------|
-| Host     | `food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com` |
+| Host     | `food-recall-db.cqjm48os4obt.us-east-1.rds.amazonaws.com` |
 | Port     | `5432` |
 | Database | `food_recall` |
 | Username | `postgres` |
@@ -178,8 +178,8 @@ python -c "from database import test_connection; test_connection()"
 
 | Task | Command |
 |------|---------|
-| SSH into EC2 | `ssh -i ~/Downloads/food-recall-keypair.pem ubuntu@98.93.18.139` |
-| SSH + Jupyter tunnel | `ssh -i ~/Downloads/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@98.93.18.139` |
+| SSH into EC2 | `ssh -i ~/Downloads/food-recall-keypair.pem ubuntu@54.210.208.14` |
+| SSH + Jupyter tunnel | `ssh -i ~/Downloads/food-recall-keypair.pem -L 8888:localhost:8888 ubuntu@54.210.208.14` |
 | Start JupyterLab | `bash ~/start_jupyter.sh` |
 | Activate venv | `source ~/Capstone-Recall-Alert/backend/venv/bin/activate` |
 | Trigger recall refresh | `curl -X POST http://localhost:8000/api/admin/refresh-recalls` |
