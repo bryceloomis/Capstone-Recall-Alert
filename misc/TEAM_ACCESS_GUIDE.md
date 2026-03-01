@@ -50,8 +50,8 @@ You're now on the EC2 server. The project lives at:
 │   ├── requirements.txt
 │   └── venv/               ← Python virtual environment (all packages here)
 ├── frontend/               ← React/TypeScript source
-├── official-prototype/     ← Current working prototype
-└── data/                   ← CSVs, test data
+├── misc/               ← Docs, DB setup, sample data
+
 ```
 
 ---

@@ -162,8 +162,8 @@ alerts       → id, user_id, recall_id, product_upc, created_at, viewed, email_
 
 | Resource | Link / Location |
 |----------|----------------|
-| SSH + JupyterLab setup | `official-prototype/TEAM_ACCESS_GUIDE.md` |
-| DB schema & connections | `official-prototype/DATABASE_AND_CONNECTIONS.md` |
+| SSH + JupyterLab setup | `misc/TEAM_ACCESS_GUIDE.md` |
+| DB schema & connections | `misc/DATABASE_AND_CONNECTIONS.md` |
 | FDA openFDA API docs | https://open.fda.gov/apis/food/enforcement/ |
 | USDA FSIS API | https://www.fsis.usda.gov/fsis/api/recall/v/1 |
 | Open Food Facts API | https://wiki.openfoodfacts.org/API |
