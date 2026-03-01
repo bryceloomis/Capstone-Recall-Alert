@@ -1,9 +1,22 @@
-node_modules/
-dist/
+# Python
+__pycache__/
+backend/venv/
+*.pyc
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Environment files (never commit secrets)
 .env
+backend/.env
+
+# OS
 .DS_Store
 *.log
-*.tsbuildinfo
-__pycache__/
+
+# Editor
 .cursor/
 .vscode/
+.claude/

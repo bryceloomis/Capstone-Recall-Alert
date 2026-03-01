@@ -47,7 +47,7 @@ The backend connects to **AWS RDS PostgreSQL** for products, recalls, users, and
 ## 2. S3 (recallguard-dev-data)
 
 - **Bucket:** `recallguard-dev-data` (us-east-1).
-- **Use:** Scan/product images (e.g. under `scans/`). Backend snippet: `official-prototype/backend/s3_upload.py` (uses env `S3_BUCKET`, default `recallguard-dev-data`).
+- **Use:** Scan/product images (e.g. under `scans/`). Backend snippet: `backend/s3_upload.py` (uses env `S3_BUCKET`, default `recallguard-dev-data`).
 - **Frontend:** No direct S3 access; uploads go through the backend (`POST /api/upload-image` when you add that route).
 
 ---
@@ -72,7 +72,7 @@ The backend connects to **AWS RDS PostgreSQL** for products, recalls, users, and
 |-------|--------|
 | Backend uses RDS | Backend config: host, db `food_recall`, user, **password from team lead**. |
 | Backend uses S3  | Backend env `S3_BUCKET=recallguard-dev-data` (or default in snippet). |
-| Frontend talks to backend | In `official-prototype/frontend`, set `.env`: `VITE_API_URL=<your FastAPI URL>`. |
+| Frontend talks to backend | In `frontend`, set `.env`: `VITE_API_URL=<your FastAPI URL>`. |
 | FDA recalls (optional) | Backend merges `fda_recalls.py` and exposes `GET /api/recalls/fda`. |
 
 **Security:** Do not commit `.env` or any file containing the DB password or API keys. Use `.env.example` with placeholders only.
