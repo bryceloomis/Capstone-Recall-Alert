@@ -145,31 +145,42 @@ def format_recall(row: dict) -> dict:
 def _lookup_off(upc: str) -> Optional[dict]:
     """
     Fetch a product from Open Food Facts by UPC.
+    Tries the raw UPC first, then zero-padded to 13 digits (EAN-13),
+    since most US 12-digit UPC-A barcodes are stored as EAN-13 in OFF.
     Returns a dict ready to INSERT into the products table, or None if not found.
     """
+    # Try both the original UPC and its EAN-13 equivalent
+    candidates = [upc]
+    if len(upc) == 12:
+        candidates.append("0" + upc)    # UPC-A → EAN-13
+    elif len(upc) == 13 and upc.startswith("0"):
+        candidates.append(upc[1:])      # EAN-13 → UPC-A fallback
+
     try:
-        resp = req.get(
-            OFF_PRODUCT_URL.format(upc=upc),
-            headers=OFF_HEADERS,
-            timeout=8,
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        if data.get("status") != 1:
-            return None
-        p = data["product"]
-        product_name = (p.get("product_name") or "").strip()
-        if not product_name:
-            return None
-        return {
-            "upc":          upc,
-            "product_name": product_name[:255],
-            "brand_name":   (p.get("brands") or "").split(",")[0].strip()[:255],
-            "category":     (p.get("categories") or "").split(",")[0].strip()[:100],
-            "ingredients":  (p.get("ingredients_text") or "")[:5000],
-            "image_url":    (p.get("image_url") or "")[:500],
-        }
+        for candidate in candidates:
+            resp = req.get(
+                OFF_PRODUCT_URL.format(upc=candidate),
+                headers=OFF_HEADERS,
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if data.get("status") != 1:
+                continue
+            p = data["product"]
+            product_name = (p.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            return {
+                "upc":          upc,   # store under the original UPC the user scanned
+                "product_name": product_name[:255],
+                "brand_name":   (p.get("brands") or "").split(",")[0].strip()[:255],
+                "category":     (p.get("categories") or "").split(",")[0].strip()[:100],
+                "ingredients":  (p.get("ingredients_text") or "")[:5000],
+                "image_url":    (p.get("image_url") or "")[:500],
+            }
+        return None
     except Exception as exc:
         log.warning("Open Food Facts lookup failed for upc=%s: %s", upc, exc)
         return None
