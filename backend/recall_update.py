@@ -1,8 +1,9 @@
 """
-recall_update.py – FDA/USDA recall data refresh + APScheduler.
+recall_update.py – FDA recall data refresh + APScheduler.
 
-Teammates: fill in the TODO sections for USDA FSIS and any other sources.
 The FDA openFDA enforcement endpoint is fully wired up.
+
+Alert generation and email notifications live in user_alerts.py.
 
 Scheduler: runs run_recall_refresh() every 6 hours automatically when
            the FastAPI app starts (started by app.py via start_recall_scheduler()).
@@ -35,6 +36,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import APIRouter
 
 from database import execute_query
+from user_alerts import generate_alerts_for_new_recalls
 
 log = logging.getLogger(__name__)
 
@@ -78,26 +80,6 @@ def fetch_fda_recalls(limit: int = RECALL_PAGE_LIMIT, skip: int = 0) -> list[dic
     except Exception as exc:
         log.error("FDA API fetch error (skip=%d): %s", skip, exc)
         return []
-
-
-# ── USDA stub ──────────────────────────────────────────────────────────────────
-
-def fetch_usda_recalls() -> list[dict]:
-    """
-    TODO: Fetch food recall data from USDA FSIS.
-
-    Reference: https://www.fsis.usda.gov/recalls
-    The FSIS recall data is available at:
-      https://www.fsis.usda.gov/fsis/api/recall/v/1
-    or as an RSS feed:
-      https://www.fsis.usda.gov/rss/recalls.xml
-
-    Return format should match map_usda_to_db() output below.
-    Replace this stub and implement map_usda_to_db() when ready.
-    """
-    # TODO: implement USDA fetch
-    log.info("USDA fetch not yet implemented – skipping.")
-    return []
 
 
 # ── Field mappers ──────────────────────────────────────────────────────────────
@@ -168,15 +150,6 @@ def map_fda_to_db(record: dict) -> Optional[dict]:
     }
 
 
-def map_usda_to_db(record: dict) -> Optional[dict]:
-    """
-    TODO: Map a USDA FSIS record to our recalls table schema.
-    Implement once fetch_usda_recalls() is done.
-    """
-    # TODO: implement USDA field mapping
-    return None
-
-
 # ── DB upsert ──────────────────────────────────────────────────────────────────
 
 def upsert_recall(record: dict) -> bool:
@@ -218,72 +191,15 @@ def upsert_recall(record: dict) -> bool:
         return False
 
 
-# ── Alert generation ──────────────────────────────────────────────────────────
-
-def generate_alerts_for_new_recalls() -> int:
-    """
-    After importing new recalls, find users whose saved grocery items
-    match a recalled product and create alert rows for them.
-
-    Matches on product_upc (exact UPC) from user_carts vs recalls.upc.
-    Skips users who already have an alert for that recall.
-
-    Returns the number of new alert rows created.
-    """
-    try:
-        # Find (user_id, recall_id) pairs that don't have an alert yet
-        new_pairs = execute_query(
-            """
-            SELECT DISTINCT
-                uc.user_id,
-                r.id         AS recall_id,
-                uc.product_upc,
-                uc.product_name
-            FROM user_carts uc
-            JOIN recalls r
-                ON uc.product_upc = r.upc
-            LEFT JOIN alerts a
-                ON a.user_id = uc.user_id AND a.recall_id = r.id
-            WHERE a.id IS NULL;
-            """
-        )
-
-        count = 0
-        for pair in new_pairs:
-            try:
-                execute_query(
-                    """
-                    INSERT INTO alerts (user_id, recall_id, product_upc, created_at)
-                    VALUES (%s, %s, %s, NOW())
-                    ON CONFLICT DO NOTHING;
-                    """,
-                    (pair["user_id"], pair["recall_id"], pair["product_upc"]),
-                )
-                count += 1
-            except Exception as exc:
-                log.warning(
-                    "Could not insert alert for user=%s recall=%s: %s",
-                    pair["user_id"], pair["recall_id"], exc,
-                )
-
-        if count:
-            log.info("Generated %d new alerts.", count)
-        return count
-
-    except Exception as exc:
-        log.error("generate_alerts_for_new_recalls error: %s", exc)
-        return 0
-
-
 # ── Main refresh pipeline ─────────────────────────────────────────────────────
 
 def run_recall_refresh() -> dict:
     """
     Full recall refresh pipeline:
-      1. Fetch from all sources (FDA + USDA stub)
+      1. Fetch from FDA
       2. Map to DB schema
       3. Upsert each record
-      4. Generate alerts for affected users
+      4. Generate alerts for affected users (via user_alerts.py)
 
     Called automatically by APScheduler every 6 hours,
     and manually via POST /api/admin/refresh-recalls.
@@ -310,30 +226,16 @@ def run_recall_refresh() -> dict:
         else:
             skipped += 1
 
-    # ── USDA (stub) ────────────────────────────────────────────────────────────
-    usda_raw = fetch_usda_recalls()
-    log.info("USDA: fetched %d raw records (stub).", len(usda_raw))
-    for raw in usda_raw:
-        mapped = map_usda_to_db(raw)
-        if not mapped:
-            skipped += 1
-            continue
-        was_inserted = upsert_recall(mapped)
-        if was_inserted:
-            inserted += 1
-        else:
-            skipped += 1
-
     # ── Alerts ────────────────────────────────────────────────────────────────
     alerts_generated = generate_alerts_for_new_recalls()
 
     summary = {
-        "inserted":          inserted,
-        "skipped":           skipped,
-        "alerts_generated":  alerts_generated,
-        "sources":           ["FDA", "USDA (stub)"],
-        "errors":            errors,
-        "timestamp":         datetime.now().isoformat(),
+        "inserted":         inserted,
+        "skipped":          skipped,
+        "alerts_generated": alerts_generated,
+        "sources":          ["FDA"],
+        "errors":           errors,
+        "timestamp":        datetime.now().isoformat(),
     }
     log.info("Recall refresh complete: %s", summary)
     return summary
