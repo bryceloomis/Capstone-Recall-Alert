@@ -8,7 +8,9 @@ This file is intentionally thin. All route logic lives in sub-modules:
   user_routes.py     – POST /api/users/register, POST /api/users/login,
                        GET/POST/DELETE /api/user/cart/*
   receipt_scan.py    – POST /api/receipt/scan
-  recall_update.py   – POST /api/admin/refresh-recalls  (+ APScheduler)
+  user_alerts.py     – GET /api/alerts/{user_id}, PATCH /api/alerts/{alert_id}/viewed,
+                       alert generation + email notification stub
+  recall_update.py   – POST /api/admin/refresh-recalls  (+ APScheduler, FDA only)
 
 To add a new area of functionality, create a new *_routes.py file with an
 APIRouter, then register it below with app.include_router().
@@ -24,6 +26,7 @@ from database import test_connection, execute_query
 # Sub-module routers
 from barcode_routes import router as barcode_router
 from user_routes    import router as user_router
+from user_alerts    import router as alerts_router
 from receipt_scan   import router as receipt_router
 from recall_update  import router as recall_router, start_recall_scheduler
 
@@ -43,6 +46,7 @@ app.add_middleware(
 # Register all routers
 app.include_router(barcode_router)
 app.include_router(user_router)
+app.include_router(alerts_router)
 app.include_router(receipt_router)
 app.include_router(recall_router)
 
@@ -65,8 +69,9 @@ async def root():
         "modules": {
             "barcode_routes.py":  "Product search, manual submit, recall check",
             "user_routes.py":     "Auth (register/login) + cart CRUD",
+            "user_alerts.py":     "Alert endpoints + generation + email stub",
             "receipt_scan.py":    "Receipt OCR + product matching",
-            "recall_update.py":   "FDA/USDA recall refresh + alert generation",
+            "recall_update.py":   "FDA recall refresh + APScheduler",
         },
         "endpoints": {
             "/api/health":                  "Health check (live DB counts)",
@@ -80,6 +85,8 @@ async def root():
             "/api/admin/refresh-recalls":   "POST – manual recall refresh",
             "/api/users/register":          "POST – create account",
             "/api/users/login":             "POST – sign in",
+            "/api/alerts/{user_id}":        "GET  – user's recall alerts",
+            "/api/alerts/{alert_id}/viewed":"PATCH – mark alert as viewed",
         },
     }
 
