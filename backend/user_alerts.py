@@ -116,26 +116,96 @@ def send_alert_email(user_id: int, product_name: str) -> None:
     log.info("send_alert_email called for user_id=%s product=%s (not yet implemented)", user_id, product_name)
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_user_id(user_id: str):
+    """Parse user_id string → int. Returns None for guest ids like 'test_user'."""
+    try:
+        return int(user_id)
+    except (ValueError, TypeError):
+        return None
+
+
 # ── API Endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/api/alerts/{user_id}")
 async def get_user_alerts(user_id: str):
     """
     Return all alerts for a user, joined with recall details.
-
-    TODO: implement query — join alerts → recalls, filter by user_id,
-    return unviewed first.
+    Unviewed alerts come first, then sorted by created_at descending.
     """
-    # TODO: implement
-    raise HTTPException(status_code=501, detail="Not yet implemented")
+    uid = _parse_user_id(user_id)
+    if uid is None:
+        return {"user_id": user_id, "alerts": [], "count": 0}
+
+    rows = execute_query(
+        """
+        SELECT
+            a.id            AS alert_id,
+            a.product_upc,
+            a.product_name,
+            a.created_at,
+            a.viewed,
+            a.email_sent,
+            r.id            AS recall_id,
+            r.product_name  AS recall_product_name,
+            r.brand_name,
+            r.recall_date,
+            r.reason,
+            r.severity,
+            r.firm_name,
+            r.distribution_pattern,
+            r.source
+        FROM alerts a
+        JOIN recalls r ON a.recall_id = r.id
+        WHERE a.user_id = %s
+        ORDER BY a.viewed ASC, a.created_at DESC;
+        """,
+        (uid,),
+    )
+
+    alerts = [
+        {
+            "alert_id":     r["alert_id"],
+            "product_upc":  r["product_upc"],
+            "product_name": r["product_name"] or r["recall_product_name"],
+            "viewed":       r["viewed"],
+            "created_at":   str(r["created_at"]),
+            "recall": {
+                "recall_id":    r["recall_id"],
+                "product_name": r["recall_product_name"],
+                "brand_name":   r["brand_name"] or "",
+                "recall_date":  str(r["recall_date"]),
+                "reason":       r["reason"],
+                "severity":     r["severity"] or "",
+                "firm_name":    r["firm_name"] or "",
+                "distribution": r["distribution_pattern"] or "",
+                "source":       r["source"] or "",
+            },
+        }
+        for r in rows
+    ]
+
+    return {
+        "user_id":       user_id,
+        "alerts":        alerts,
+        "count":         len(alerts),
+        "unviewed_count": sum(1 for a in alerts if not a["viewed"]),
+    }
 
 
 @router.patch("/api/alerts/{alert_id}/viewed")
 async def mark_alert_viewed(alert_id: int):
-    """
-    Mark a single alert as viewed.
-
-    TODO: implement — UPDATE alerts SET viewed = TRUE WHERE id = alert_id.
-    """
-    # TODO: implement
-    raise HTTPException(status_code=501, detail="Not yet implemented")
+    """Mark a single alert as viewed."""
+    result = execute_query(
+        """
+        UPDATE alerts
+        SET viewed = TRUE
+        WHERE id = %s
+        RETURNING id, viewed;
+        """,
+        (alert_id,),
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+    return {"alert_id": result[0]["id"], "viewed": result[0]["viewed"]}
