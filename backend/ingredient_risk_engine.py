@@ -49,6 +49,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional
 
+from LLM_services import disambiguate_ingredients, DisambiguationResult, explain_recall
+
 log = logging.getLogger(__name__)
 
 
@@ -1013,7 +1015,7 @@ def analyse_product_risk(
     llm_results = []
     if enable_llm and (user_allergens or user_diets):
         try:
-            from llm_service import disambiguate_ingredients, DisambiguationResult
+            #from llm_service import disambiguate_ingredients, DisambiguationResult
 
             llm_results = disambiguate_ingredients(
                 parsed_tokens=parsed,

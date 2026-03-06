@@ -34,9 +34,10 @@ from typing import Optional
 import requests as req
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import APIRouter
+from LLM_services import explain_recall
 
 from database import execute_query
-from user_alerts import generate_alerts_for_new_recalls
+from backend.user_routes import generate_alerts_for_new_recalls
 
 log = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ def _generate_recall_summary(recall_record: dict) -> None:
     └────────────────────────────────────────────────────────────────┘
     """
     try:
-        from llm_service import explain_recall
+        #from llm_service import explain_recall
         import json
 
         explanation = explain_recall(
