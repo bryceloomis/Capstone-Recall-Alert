@@ -1,141 +1,297 @@
 """
-user_alerts.py – Alert generation and email notifications for Recall Alert.
+user_routes.py – FastAPI APIRouter for user auth, profile, and grocery cart.
 
-Two responsibilities:
-  1. generate_alerts_for_new_recalls() — called by recall_update.py after each
-     recall refresh. Finds users whose cart items match recalled products and
-     writes rows to the alerts table.
-
-  2. send_alert_email() — stub for emailing users when a new alert is created.
-     TODO: implement with AWS SES or SendGrid.
-
-API endpoints (Bryce's area):
-  GET   /api/alerts/{user_id}        – return all alerts for a user (with recall details)
-  PATCH /api/alerts/{alert_id}/viewed – mark an alert as viewed
+Endpoints:
+  POST   /api/users/register             – create account (with allergens + diets)
+  POST   /api/users/login                – sign in (returns profile incl. allergens)
+  PATCH  /api/users/{user_id}/profile    – update allergens & diet preferences
+  GET    /api/users/{user_id}/profile    – fetch current profile
+  GET    /api/user/cart/{user_id}        – fetch user's grocery list
+  POST   /api/user/cart                  – add item to list
+  DELETE /api/user/cart/{user_id}/{upc}  – remove item from list
 """
 
-import logging
-
+import bcrypt
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 
 from database import execute_query
-
-log = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-# ── Alert generation ───────────────────────────────────────────────────────────
+# ── Data Models ────────────────────────────────────────────────────────────────
 
-def generate_alerts_for_new_recalls() -> int:
-    """
-    After importing new recalls, find users whose saved grocery items
-    match a recalled product and create alert rows for them.
+class UserRegister(BaseModel):
+    name:             str
+    email:            str
+    password:         str
+    state:            Optional[str] = None          # e.g. "CA"
+    allergens:        Optional[list[str]] = []      # e.g. ["Peanuts", "Soy"]
+    diet_preferences: Optional[list[str]] = []      # e.g. ["Vegan"]
 
-    Matches on product_upc (exact UPC) from user_carts vs recalls.upc.
-    Skips users who already have an alert for that recall.
 
-    Called by recall_update.run_recall_refresh() after each refresh.
-    Returns the number of new alert rows created.
-    """
+class UserLogin(BaseModel):
+    email:    str
+    password: str
+
+
+class UserCartItem(BaseModel):
+    user_id:      str
+    upc:          str
+    product_name: str
+    brand_name:   str
+    added_date:   str
+
+
+class ProfileUpdate(BaseModel):
+    """Payload for updating a user's allergen and diet profile."""
+    allergens:        Optional[list[str]] = None
+    diet_preferences: Optional[list[str]] = None
+    state:            Optional[str] = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_user_id(user_id: str) -> Optional[int]:
+    """Parse user_id string → int. Returns None for guest ids like 'test_user'."""
     try:
-        new_pairs = execute_query(
-            """
-            SELECT DISTINCT
-                uc.user_id,
-                r.id         AS recall_id,
-                uc.product_upc,
-                uc.product_name
-            FROM user_carts uc
-            JOIN recalls r
-                ON uc.product_upc = r.upc
-            LEFT JOIN alerts a
-                ON a.user_id = uc.user_id AND a.recall_id = r.id
-            WHERE a.id IS NULL;
-            """
-        )
-
-        count = 0
-        for pair in new_pairs:
-            try:
-                execute_query(
-                    """
-                    INSERT INTO alerts (user_id, recall_id, product_upc, created_at)
-                    VALUES (%s, %s, %s, NOW())
-                    ON CONFLICT DO NOTHING;
-                    """,
-                    (pair["user_id"], pair["recall_id"], pair["product_upc"]),
-                )
-                count += 1
-                # TODO: call send_alert_email() here once implemented
-                # send_alert_email(pair["user_id"], pair["product_name"])
-            except Exception as exc:
-                log.warning(
-                    "Could not insert alert for user=%s recall=%s: %s",
-                    pair["user_id"], pair["recall_id"], exc,
-                )
-
-        if count:
-            log.info("Generated %d new alerts.", count)
-        return count
-
-    except Exception as exc:
-        log.error("generate_alerts_for_new_recalls error: %s", exc)
-        return 0
+        return int(user_id)
+    except (ValueError, TypeError):
+        return None
 
 
-# ── Email notification stub ────────────────────────────────────────────────────
+# ── Auth ───────────────────────────────────────────────────────────────────────
 
-def send_alert_email(user_id: int, product_name: str) -> None:
+@router.post("/api/users/register")
+async def register_user(user: UserRegister):
     """
-    TODO: Send an email to the user notifying them of a new recall alert.
-
-    Options:
-      - AWS SES:    boto3.client("ses").send_email(...)
-      - SendGrid:   sendgrid.SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
-
-    Steps to implement:
-      1. Look up the user's email from the users table
-      2. Build a message with the product name and recall details
-      3. Send via SES or SendGrid
-      4. Mark alerts.email_sent = TRUE on success
-
-    Example SES skeleton:
-        import boto3, os
-        ses = boto3.client("ses", region_name="us-east-1")
-        ses.send_email(
-            Source=os.getenv("ALERT_FROM_EMAIL"),
-            Destination={"ToAddresses": [user_email]},
-            Message={
-                "Subject": {"Data": f"Recall Alert: {product_name}"},
-                "Body":    {"Text": {"Data": "One of your saved items has been recalled."}},
-            },
-        )
+    Create a new user account with a bcrypt-hashed password.
+    Also persists allergens and diet_preferences so the risk engine
+    can personalise results from the first scan onward.
     """
-    # TODO: implement email delivery
-    log.info("send_alert_email called for user_id=%s product=%s (not yet implemented)", user_id, product_name)
+    existing = execute_query("SELECT id FROM users WHERE email = %s;", (user.email,))
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    password_hash = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
+
+    allergens_list = user.allergens or []
+    diets_list     = user.diet_preferences or []
+
+    result = execute_query(
+        """
+        INSERT INTO users (name, email, password_hash, state, allergens, diet_preferences)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id, name, email, state, allergens, diet_preferences, created_at;
+        """,
+        (
+            user.name,
+            user.email,
+            password_hash,
+            user.state,
+            allergens_list,     # PostgreSQL TEXT[] via psycopg2 list adaptation
+            diets_list,
+        ),
+    )
+    new_user = result[0]
+    return {
+        "message": "Account created successfully.",
+        "user": {
+            "id":               new_user["id"],
+            "name":             new_user["name"],
+            "email":            new_user["email"],
+            "state":            new_user.get("state"),
+            "allergens":        new_user.get("allergens") or [],
+            "diet_preferences": new_user.get("diet_preferences") or [],
+            "created_at":       str(new_user["created_at"]),
+        },
+    }
 
 
-# ── API Endpoints ──────────────────────────────────────────────────────────────
+@router.post("/api/users/login")
+async def login_user(credentials: UserLogin):
+    """Verify email + password and return the user record including profile."""
+    result = execute_query(
+        """SELECT id, name, email, password_hash, state,
+                  allergens, diet_preferences, created_at
+           FROM users WHERE email = %s;""",
+        (credentials.email,),
+    )
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-@router.get("/api/alerts/{user_id}")
-async def get_user_alerts(user_id: str):
+    user = result[0]
+    if not bcrypt.checkpw(credentials.password.encode(), user["password_hash"].encode()):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    return {
+        "message": "Login successful.",
+        "user": {
+            "id":               user["id"],
+            "name":             user["name"],
+            "email":            user["email"],
+            "state":            user.get("state"),
+            "allergens":        user.get("allergens") or [],
+            "diet_preferences": user.get("diet_preferences") or [],
+            "created_at":       str(user["created_at"]),
+        },
+    }
+
+
+# ── Profile ────────────────────────────────────────────────────────────────────
+
+@router.get("/api/users/{user_id}/profile")
+async def get_user_profile(user_id: int):
+    """Return the user's current allergen and diet profile."""
+    rows = execute_query(
+        """SELECT id, name, email, state, allergens, diet_preferences
+           FROM users WHERE id = %s LIMIT 1;""",
+        (user_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found.")
+    u = rows[0]
+    return {
+        "user_id":          u["id"],
+        "name":             u["name"],
+        "email":            u["email"],
+        "state":            u.get("state"),
+        "allergens":        u.get("allergens") or [],
+        "diet_preferences": u.get("diet_preferences") or [],
+    }
+
+
+@router.patch("/api/users/{user_id}/profile")
+async def update_user_profile(user_id: int, update: ProfileUpdate):
     """
-    Return all alerts for a user, joined with recall details.
-
-    TODO: implement query — join alerts → recalls, filter by user_id,
-    return unviewed first.
+    Update allergens, diet_preferences, and/or state for a user.
+    Only supplied fields are changed; omitted (None) fields are left as-is.
     """
-    # TODO: implement
-    raise HTTPException(status_code=501, detail="Not yet implemented")
+    # Verify user exists
+    existing = execute_query("SELECT id FROM users WHERE id = %s LIMIT 1;", (user_id,))
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found.")
 
+    set_clauses = []
+    params: list = []
 
-@router.patch("/api/alerts/{alert_id}/viewed")
-async def mark_alert_viewed(alert_id: int):
+    if update.allergens is not None:
+        set_clauses.append("allergens = %s")
+        params.append(update.allergens)
+
+    if update.diet_preferences is not None:
+        set_clauses.append("diet_preferences = %s")
+        params.append(update.diet_preferences)
+
+    if update.state is not None:
+        set_clauses.append("state = %s")
+        params.append(update.state)
+
+    if not set_clauses:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    params.append(user_id)
+    query = f"""
+        UPDATE users SET {', '.join(set_clauses)}
+        WHERE id = %s
+        RETURNING id, name, email, state, allergens, diet_preferences;
     """
-    Mark a single alert as viewed.
+    result = execute_query(query, tuple(params))
+    u = result[0]
 
-    TODO: implement — UPDATE alerts SET viewed = TRUE WHERE id = alert_id.
-    """
-    # TODO: implement
-    raise HTTPException(status_code=501, detail="Not yet implemented")
+    return {
+        "message": "Profile updated.",
+        "user": {
+            "user_id":          u["id"],
+            "name":             u["name"],
+            "email":            u["email"],
+            "state":            u.get("state"),
+            "allergens":        u.get("allergens") or [],
+            "diet_preferences": u.get("diet_preferences") or [],
+        },
+    }
+
+
+# ── Cart ───────────────────────────────────────────────────────────────────────
+
+@router.get("/api/user/cart/{user_id}")
+async def get_user_cart(user_id: str):
+    """Return all items in a user's saved grocery list from RDS."""
+    uid = _parse_user_id(user_id)
+    if uid is None:
+        return {"user_id": user_id, "cart": [], "count": 0}
+
+    rows = execute_query(
+        """
+        SELECT product_upc AS upc, product_name, brand_name, added_date
+        FROM user_carts
+        WHERE user_id = %s
+        ORDER BY added_date DESC;
+        """,
+        (uid,),
+    )
+    cart = [
+        {
+            "upc":          r["upc"],
+            "product_name": r["product_name"],
+            "brand_name":   r["brand_name"],
+            "added_date":   str(r["added_date"]),
+        }
+        for r in rows
+    ]
+    return {"user_id": user_id, "cart": cart, "count": len(cart)}
+
+
+@router.post("/api/user/cart")
+async def add_to_cart(item: UserCartItem):
+    """Add an item to the user's grocery list in RDS."""
+    uid = _parse_user_id(item.user_id)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Must be signed in to save items.")
+
+    result = execute_query(
+        """
+        INSERT INTO user_carts (user_id, product_upc, product_name, brand_name)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (user_id, product_upc) DO NOTHING
+        RETURNING product_upc AS upc, product_name, brand_name, added_date;
+        """,
+        (uid, item.upc, item.product_name, item.brand_name),
+    )
+
+    if not result:
+        return {"message": "Item already in your list"}
+
+    row = result[0]
+    return {
+        "message": "Item added to your grocery list",
+        "item": {
+            "upc":          row["upc"],
+            "product_name": row["product_name"],
+            "brand_name":   row["brand_name"],
+            "added_date":   str(row["added_date"]),
+        },
+    }
+
+
+@router.delete("/api/user/cart/{user_id}/{upc}")
+async def remove_from_cart(user_id: str, upc: str):
+    """Remove an item from the user's grocery list in RDS."""
+    uid = _parse_user_id(user_id)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Must be signed in to modify your list.")
+
+    execute_query(
+        "DELETE FROM user_carts WHERE user_id = %s AND product_upc = %s;",
+        (uid, upc),
+    )
+    count_result = execute_query(
+        "SELECT COUNT(*) AS total FROM user_carts WHERE user_id = %s;",
+        (uid,),
+    )
+    return {
+        "message":    "Item removed",
+        "cart_count": count_result[0]["total"] if count_result else 0,
+    }

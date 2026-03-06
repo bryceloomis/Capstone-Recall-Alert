@@ -7,9 +7,10 @@ Barcode scan flow:
   3. If found in OFF → save to products table for future lookups
   4. If not found anywhere → return found=False so frontend can show manual entry form
   5. Always cross-reference recalls table on the UPC
+  6. If user_id provided → run ingredient risk analysis against user profile
 
 Endpoints:
-  POST /api/search                – product search by UPC or name
+  POST /api/search                – product search by UPC or name (+ inline risk)
   POST /api/products              – manually submit a product not found in Open Food Facts
   GET  /api/recalls               – all recalls (newest first)
   GET  /api/recalls/check/{upc}   – recall status for a single UPC
@@ -23,6 +24,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import execute_query
+from ingredient_risk_engine import analyse_product_risk
 
 log = logging.getLogger(__name__)
 
@@ -35,8 +37,9 @@ OFF_HEADERS     = {"User-Agent": "RecallAlert/0.2 (capstone@berkeley.edu)"}
 # ── Data Models ────────────────────────────────────────────────────────────────
 
 class ProductSearch(BaseModel):
-    upc:  Optional[str] = None
-    name: Optional[str] = None
+    upc:     Optional[str] = None
+    name:    Optional[str] = None
+    user_id: Optional[int] = None   # NEW: enables personalised risk analysis
 
 
 class ManualProduct(BaseModel):
@@ -46,6 +49,7 @@ class ManualProduct(BaseModel):
     brand_name:   Optional[str] = None
     category:     Optional[str] = None
     ingredients:  Optional[str] = None
+    user_id:      Optional[int] = None   # NEW: run risk on submission
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -131,11 +135,43 @@ def _cache_product(product: dict) -> None:
         log.warning("Failed to cache product upc=%s: %s", product.get("upc"), exc)
 
 
+def _load_user_profile(user_id: int) -> dict:
+    """Load allergens and diet_preferences from users table."""
+    rows = execute_query(
+        "SELECT allergens, diet_preferences FROM users WHERE id = %s LIMIT 1;",
+        (user_id,),
+    )
+    if not rows:
+        return {"allergens": [], "diets": []}
+    row = rows[0]
+    allergens = row.get("allergens") or []
+    diets     = row.get("diet_preferences") or []
+    if isinstance(allergens, str):
+        allergens = [a.strip() for a in allergens.split(",") if a.strip()]
+    if isinstance(diets, str):
+        diets = [d.strip() for d in diets.split(",") if d.strip()]
+    return {"allergens": allergens, "diets": diets}
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.post("/api/search")
 async def search_product(search: ProductSearch):
-    """Search for a product by UPC (exact) or name (fuzzy). Returns product + recall status."""
+    """
+    Search for a product by UPC (exact) or name (fuzzy).
+    Returns product + recall status + ingredient risk analysis.
+
+    If user_id is provided, allergen and diet preferences are loaded from the
+    user's profile for personalised risk scoring.
+    """
+
+    # Load user profile once if user_id provided
+    allergens: list[str] = []
+    diets: list[str] = []
+    if search.user_id:
+        profile = _load_user_profile(search.user_id)
+        allergens = profile["allergens"]
+        diets     = profile["diets"]
 
     if search.upc:
         upc = search.upc.strip()
@@ -169,6 +205,15 @@ async def search_product(search: ProductSearch):
         ingredients_raw = product.get("ingredients") or ""
         ingredients = [i.strip() for i in ingredients_raw.replace("|", ",").split(",") if i.strip()]
 
+        # 5. Run ingredient risk analysis (two-layer verdict)
+        risk_report = analyse_product_risk(
+            ingredients_text=ingredients_raw,
+            user_allergens=allergens,
+            user_diets=diets,
+            is_recalled=recall_info is not None,
+            recall_date=recall_info.get("recall_date") if recall_info else None,
+        )
+
         return {
             "found":        True,
             "upc":          product["upc"],
@@ -179,6 +224,9 @@ async def search_product(search: ProductSearch):
             "image_url":    product.get("image_url") or "",
             "is_recalled":  recall_info is not None,
             "recall_info":  recall_info,
+            "verdict":      risk_report.verdict,
+            "explanation":  risk_report.explanation,
+            "risk":         risk_report.to_dict(),
         }
 
     elif search.name:
@@ -202,6 +250,16 @@ async def search_product(search: ProductSearch):
                 (product["upc"],),
             )
             recall_info = format_recall(recall_rows[0]) if recall_rows else None
+
+            ingredients_raw = product.get("ingredients") or ""
+            risk_report = analyse_product_risk(
+                ingredients_text=ingredients_raw,
+                user_allergens=allergens,
+                user_diets=diets,
+                is_recalled=recall_info is not None,
+                recall_date=recall_info.get("recall_date") if recall_info else None,
+            )
+
             results.append({
                 "upc":          product["upc"],
                 "product_name": product["product_name"],
@@ -209,6 +267,9 @@ async def search_product(search: ProductSearch):
                 "category":     product.get("category") or "Unknown",
                 "is_recalled":  recall_info is not None,
                 "recall_info":  recall_info,
+                "verdict":      risk_report.verdict,
+                "explanation":  risk_report.explanation,
+                "risk":         risk_report.to_dict(),
             })
 
         return {"count": len(results), "results": results}
@@ -221,8 +282,8 @@ async def search_product(search: ProductSearch):
 async def submit_product(product: ManualProduct):
     """
     Manually submit a product that wasn't found in Open Food Facts.
-    Saves to our products table and immediately checks against recalls.
-    Frontend should call this after the user fills in the manual entry form.
+    Saves to our products table and immediately checks against recalls
+    and runs risk analysis if user_id provided.
     """
     upc = product.upc.strip()
 
@@ -244,12 +305,28 @@ async def submit_product(product: ManualProduct):
             },
         )
 
-    # Check recalls immediately so user knows if what they just entered is recalled
+    # Check recalls immediately
     recall_rows = execute_query(
         "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
         (upc,),
     )
     recall_info = format_recall(recall_rows[0]) if recall_rows else None
+
+    # Run risk analysis
+    allergens: list[str] = []
+    diets: list[str] = []
+    if product.user_id:
+        profile = _load_user_profile(product.user_id)
+        allergens = profile["allergens"]
+        diets     = profile["diets"]
+
+    risk_report = analyse_product_risk(
+        ingredients_text=product.ingredients or "",
+        user_allergens=allergens,
+        user_diets=diets,
+        is_recalled=recall_info is not None,
+        recall_date=recall_info.get("recall_date") if recall_info else None,
+    )
 
     return {
         "saved":        True,
@@ -258,6 +335,9 @@ async def submit_product(product: ManualProduct):
         "brand_name":   product.brand_name or "",
         "is_recalled":  recall_info is not None,
         "recall_info":  recall_info,
+        "verdict":      risk_report.verdict,
+        "explanation":  risk_report.explanation,
+        "risk":         risk_report.to_dict(),
     }
 
 

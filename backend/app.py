@@ -29,6 +29,7 @@ from user_routes    import router as user_router
 from user_alerts    import router as alerts_router
 from receipt_scan   import router as receipt_router
 from recall_update  import router as recall_router, start_recall_scheduler
+from risk_routes    import router as risk_router
 
 
 # ── App setup ──────────────────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ app.include_router(user_router)
 app.include_router(alerts_router)
 app.include_router(receipt_router)
 app.include_router(recall_router)
+app.include_router(risk_router)
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────
@@ -72,6 +74,7 @@ async def root():
             "user_alerts.py":     "Alert endpoints + generation + email stub",
             "receipt_scan.py":    "Receipt OCR + product matching",
             "recall_update.py":   "FDA recall refresh + APScheduler",
+            "risk_routes.py":     "Ingredient risk scoring engine + scan endpoint",
         },
         "endpoints": {
             "/api/health":                  "Health check (live DB counts)",
@@ -87,6 +90,9 @@ async def root():
             "/api/users/login":             "POST – sign in",
             "/api/alerts/{user_id}":        "GET  – user's recall alerts",
             "/api/alerts/{alert_id}/viewed":"PATCH – mark alert as viewed",
+            "/api/risk/scan/{upc}":           "GET  – full barcode scan + risk analysis",
+            "/api/risk/analyse":              "POST – analyse product by UPC + profile",
+            "/api/risk/analyse-text":         "POST – analyse raw ingredient text",
         },
     }
 

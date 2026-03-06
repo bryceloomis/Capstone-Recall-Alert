@@ -25,6 +25,9 @@ class UserRegister(BaseModel):
     name:     str
     email:    str
     password: str
+    state: Optional[str] = None # e.g. "CA"
+    allergens: Optional[list[str]] = [] # e.g. ["Peanuts", "Soy"]
+    diet_preferences: Optional[list[str]] = [] # e.g. ["Vegan"]
 
 
 class UserLogin(BaseModel):
