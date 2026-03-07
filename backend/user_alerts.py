@@ -60,11 +60,11 @@ def generate_alerts_for_new_recalls() -> int:
             try:
                 execute_query(
                     """
-                    INSERT INTO alerts (user_id, recall_id, product_upc, created_at)
-                    VALUES (%s, %s, %s, NOW())
+                    INSERT INTO alerts (user_id, recall_id, product_upc, product_name, created_at)
+                    VALUES (%s, %s, %s, %s, NOW())
                     ON CONFLICT DO NOTHING;
                     """,
-                    (pair["user_id"], pair["recall_id"], pair["product_upc"]),
+                    (pair["user_id"], pair["recall_id"], pair["product_upc"], pair["product_name"]),
                 )
                 count += 1
                 # TODO: call send_alert_email() here once implemented

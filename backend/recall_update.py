@@ -37,7 +37,8 @@ from fastapi import APIRouter
 from LLM_services import explain_recall
 
 from database import execute_query
-from backend.user_routes import generate_alerts_for_new_recalls
+from user_alerts import generate_alerts_for_new_recalls
+
 
 log = logging.getLogger(__name__)
 

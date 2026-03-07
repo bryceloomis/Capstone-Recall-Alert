@@ -129,7 +129,7 @@ async def db_test():
     if not test_connection():
         raise HTTPException(status_code=503, detail="Cannot connect to database.")
 
-    tables  = ["users", "products", "recalls", "user_carts"]
+    tables  = ["users", "products", "recalls", "user_carts", "disambiguation_cache"]
     summary = {}
     for table in tables:
         try:

@@ -1,9 +1,7 @@
 """
 risk_routes.py – FastAPI APIRouter for ingredient risk analysis.
 
-Endpoints:
-  POST /api/risk/analyse          – analyse a product against user profile
-  POST /api/risk/analyse-text     – analyse raw ingredient text (no DB lookup)
+Endpoint:
   GET  /api/risk/scan/{upc}       – full scan: product lookup + risk analysis
                                     (the main endpoint the mobile app calls
                                      immediately after scanning a barcode)
@@ -29,24 +27,6 @@ from barcode_routes import _lookup_off, _cache_product, format_recall
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
-
-
-# ── Request / Response Models ──────────────────────────────────────────────────
-
-class AnalyseRequest(BaseModel):
-    """Analyse a specific product by UPC against a user's profile."""
-    upc:       str
-    user_id:   Optional[int] = None      # if provided, load profile from DB
-    allergens: Optional[list[str]] = None # override / anonymous use
-    diets:     Optional[list[str]] = None
-
-
-class AnalyseTextRequest(BaseModel):
-    """Analyse raw ingredient text without a DB product lookup."""
-    ingredients_text: str
-    allergens:        list[str] = []
-    diets:            list[str] = []
-    is_recalled:      bool = False
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -118,76 +98,7 @@ def _load_recall_summary(recall_id: Optional[int]) -> Optional[dict]:
     return None
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
-
-@router.post("/analyse")
-async def analyse_product(req: AnalyseRequest):
-    """
-    Analyse a product (by UPC) against a user's allergen and diet profile.
-
-    Priority for allergens/diets:
-      1. Explicit fields in the request body (for anonymous / override use)
-      2. user_id → load from users table
-      3. Empty lists (no personalised analysis, still returns recall status)
-    """
-    product = _resolve_product(req.upc)
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found by UPC.")
-
-    # Determine allergens & diets
-    allergens = req.allergens
-    diets     = req.diets
-    if req.user_id and (allergens is None or diets is None):
-        profile = _load_user_profile(req.user_id)
-        allergens = allergens if allergens is not None else profile["allergens"]
-        diets     = diets if diets is not None else profile["diets"]
-    allergens = allergens or []
-    diets     = diets or []
-
-    recall_info = _check_recall(req.upc)
-    ingredients_text = product.get("ingredients") or ""
-
-    report = analyse_product_risk(
-        ingredients_text=ingredients_text,
-        user_allergens=allergens,
-        user_diets=diets,
-        is_recalled=recall_info is not None,
-        recall_date=recall_info.get("recall_date") if recall_info else None,
-    )
-
-    return {
-        "product": {
-            "upc":          product.get("upc"),
-            "product_name": product.get("product_name"),
-            "brand_name":   product.get("brand_name") or "",
-            "category":     product.get("category") or "Unknown",
-            "image_url":    product.get("image_url") or "",
-        },
-        "recall":      recall_info,
-        "verdict":     report.verdict,
-        "explanation": report.explanation,
-        "risk":        report.to_dict(),
-    }
-
-
-@router.post("/analyse-text")
-async def analyse_text(req: AnalyseTextRequest):
-    """
-    Analyse raw ingredient text directly (no product lookup).
-    Useful for manual ingredient input or receipt-scanned text.
-    """
-    report = analyse_product_risk(
-        ingredients_text=req.ingredients_text,
-        user_allergens=req.allergens,
-        user_diets=req.diets,
-        is_recalled=req.is_recalled,
-    )
-    return {
-        "verdict":     report.verdict,
-        "explanation": report.explanation,
-        "risk":        report.to_dict(),
-    }
-
+# ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.get("/scan/{upc}")
 async def scan_barcode_with_risk(
@@ -221,18 +132,23 @@ async def scan_barcode_with_risk(
       "found": true,
       "product": { upc, product_name, brand_name, category, ingredients, image_url },
       "recall":  { ..., "summary": { headline, what_happened, what_to_do, ... } } | null,
-      "risk": { risk_score, risk_level, allergen_matches, diet_flags, ... },
-      "notifications": [ ... ]
+      "verdict": "DONT_BUY",
+      "explanation": [
+        "Active FDA recall reported on 2025-01-15",
+        "Contains milk (your allergen) — detected 'whole milk'"
+      ],
+      "risk": { verdict, explanation, hard_stops, caution_signals, ... }
     }
     """
     product = _resolve_product(upc)
     if not product:
         return {
-            "found": False,
-            "upc": upc,
-            "message": "Product not found. Please enter details manually.",
-            "risk": None,
-            "notifications": [],
+            "found":       False,
+            "upc":         upc,
+            "message":     "Product not found. Please enter details manually.",
+            "verdict":     None,
+            "explanation": [],
+            "risk":        None,
         }
 
     # Load user profile if signed in

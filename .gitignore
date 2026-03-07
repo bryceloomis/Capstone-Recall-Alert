@@ -20,3 +20,5 @@ backend/.env
 .cursor/
 .vscode/
 .claude/
+
+*.pem
