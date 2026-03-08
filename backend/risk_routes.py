@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from database import execute_query
 from ingredient_risk_engine import analyse_product_risk
-from barcode_routes import _lookup_off, _cache_product, format_recall
+from barcode_routes import _lookup_off, _cache_product, format_recall, check_recall
 
 log = logging.getLogger(__name__)
 
@@ -63,15 +63,6 @@ def _resolve_product(upc: str) -> Optional[dict]:
         _cache_product(off_data)
         return off_data
     return None
-
-
-def _check_recall(upc: str) -> Optional[dict]:
-    """Return the latest recall for this UPC, or None."""
-    rows = execute_query(
-        "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-        (upc,),
-    )
-    return format_recall(rows[0]) if rows else None
 
 
 def _load_recall_summary(recall_id: Optional[int]) -> Optional[dict]:
@@ -159,7 +150,11 @@ async def scan_barcode_with_risk(
         allergens = profile["allergens"]
         diets     = profile["diets"]
 
-    recall_info = _check_recall(upc)
+    recall_info = check_recall(
+        upc,
+        product_name=product.get("product_name") or "",
+        brand_name=product.get("brand_name") or "",
+    )
     ingredients_text = product.get("ingredients") or ""
 
     # ── Load plain-language recall summary if available ────────────────

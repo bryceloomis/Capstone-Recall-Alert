@@ -1,3 +1,6 @@
+
+Copy
+
 """
 ingredient_risk_engine.py – Deterministic ingredient risk scoring engine.
 
@@ -807,27 +810,53 @@ def _evaluate_hard_stops(
     # Gate 1: active recall
     if is_recalled:
         date_part = f" on {recall_date}" if recall_date else ""
-        stops.append(HardStop("RECALL", f"Active FDA recall reported{date_part}"))
+        stops.append(HardStop(
+            "RECALL",
+            f"Active FDA recall reported{date_part}. "
+            f"Do not consume this product — check the recall details for return/refund instructions.",
+        ))
 
     # Gate 2: confirmed allergen (DEFINITE or PROBABLE, not advisory-only)
     seen_allergens: set[str] = set()
     for m in allergen_matches:
         if m.confidence in (Confidence.DEFINITE, Confidence.PROBABLE) and m.allergen not in seen_allergens:
             seen_allergens.add(m.allergen)
-            verb = "Contains" if m.confidence == Confidence.DEFINITE else "Likely contains"
-            stops.append(HardStop(
-                "ALLERGEN",
-                f"{verb} {m.allergen.lower()} (your allergen) — detected '{m.matched_token}'",
-            ))
+
+            # Build a clear WHY explanation
+            severity_note = (
+                f"{m.allergen} is an FDA Big 9 allergen that can cause severe allergic reactions including anaphylaxis."
+                if m.allergen in _HIGH_SEVERITY_ALLERGENS
+                else f"{m.allergen} is a known allergen that can cause allergic reactions."
+            )
+
+            if m.confidence == Confidence.DEFINITE:
+                stops.append(HardStop(
+                    "ALLERGEN",
+                    f"Contains {m.allergen.lower()} (your declared allergen) — "
+                    f"detected '{m.matched_token}' in the ingredient list. "
+                    f"{severity_note}",
+                ))
+            else:
+                stops.append(HardStop(
+                    "ALLERGEN",
+                    f"Likely contains {m.allergen.lower()} (your declared allergen) — "
+                    f"'{m.matched_token}' is a known derivative of {m.allergen.lower()}. "
+                    f"{severity_note}",
+                ))
 
     # Gate 3: strict diet violation (DEFINITE only)
     seen_diets: set[str] = set()
     for f in diet_flags:
         if f.confidence == Confidence.DEFINITE and f.diet in strict_diets and f.diet not in seen_diets:
             seen_diets.add(f.diet)
+
+            # Build a clear WHY explanation from the diet rule description
+            diet_desc = DIET_RULES.get(f.diet, {}).get("description", "")
             stops.append(HardStop(
                 "DIET_STRICT",
-                f"Violates {f.diet} diet — contains '{f.flagged_token}'",
+                f"Not {f.diet} — '{f.flagged_token}' is incompatible. "
+                f"{f.diet} means {diet_desc.lower()}." if diet_desc
+                else f"Not {f.diet} — contains '{f.flagged_token}'.",
             ))
 
     return stops
@@ -858,7 +887,9 @@ def _evaluate_caution_signals(
             seen.add(m.allergen)
             signals.append(CautionSignal(
                 "CROSS_CONTACT",
-                f"May contain {m.allergen.lower()} (cross-contact advisory)",
+                f"Advisory: may contain traces of {m.allergen.lower()} — "
+                f"this product is made in a facility that also processes {m.allergen.lower()}. "
+                f"Not confirmed in the ingredient list, but cross-contamination is possible.",
                 8,
             ))
 
@@ -869,16 +900,21 @@ def _evaluate_caution_signals(
         if key in seen_dt:
             continue
         seen_dt.add(key)
+        diet_desc = DIET_RULES.get(f.diet, {}).get("description", "")
         if f.confidence == Confidence.PROBABLE:
             signals.append(CautionSignal(
                 "DIET_SOFT",
-                f"Likely incompatible with {f.diet} — '{f.flagged_token}'",
+                f"Possibly not {f.diet} — '{f.flagged_token}' may be incompatible. "
+                f"Could not confirm with certainty from the label text alone.",
                 5,
             ))
         elif f.confidence == Confidence.DEFINITE and f.diet not in strict_diets:
             signals.append(CautionSignal(
                 "DIET_SOFT",
-                f"Incompatible with {f.diet} preference — '{f.flagged_token}'",
+                f"Not {f.diet} — contains '{f.flagged_token}'. "
+                f"{f.diet} avoids this because: {diet_desc.lower()}."
+                if diet_desc else
+                f"Not {f.diet} — contains '{f.flagged_token}'.",
                 4,
             ))
 
@@ -887,24 +923,38 @@ def _evaluate_caution_signals(
         entry = FLAGGED_ADDITIVES.get(token)
         if entry:
             desc, pts = entry
-            signals.append(CautionSignal("ADDITIVE", f"Contains '{token}' — {desc}", pts))
+            signals.append(CautionSignal(
+                "ADDITIVE",
+                f"Contains '{token}' — {desc}. "
+                f"This additive is legal but frequently flagged by health-conscious consumers.",
+                pts,
+            ))
         else:
             for additive_key, (desc, pts) in FLAGGED_ADDITIVES.items():
                 if len(additive_key) >= 5 and additive_key in token:
-                    signals.append(CautionSignal("ADDITIVE", f"Contains '{token}' — {desc}", pts))
+                    signals.append(CautionSignal(
+                        "ADDITIVE",
+                        f"Contains '{token}' — {desc}. "
+                        f"This additive is legal but frequently flagged by health-conscious consumers.",
+                        pts,
+                    ))
                     break
 
     # Missing or very short ingredient list
     if not ingredients_text or not ingredients_text.strip():
         signals.append(CautionSignal(
             "LOW_CONFIDENCE",
-            "Ingredient list missing — unable to perform full analysis",
+            "Ingredient list is missing for this product — "
+            "unable to check for allergens, diet compatibility, or additives. "
+            "Check the physical label before consuming.",
             12,
         ))
     elif len(parsed_ingredients) < _MIN_INGREDIENTS_FOR_CONFIDENCE:
         signals.append(CautionSignal(
             "LOW_CONFIDENCE",
-            f"Ingredient list very short ({len(parsed_ingredients)} item(s)) — low confidence",
+            f"Ingredient list is unusually short ({len(parsed_ingredients)} item(s)) — "
+            f"the product database may have incomplete data. "
+            f"Check the physical label for the full ingredient list.",
             8,
         ))
 

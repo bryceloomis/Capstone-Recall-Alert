@@ -77,6 +77,81 @@ def format_recall(row: dict) -> dict:
     }
 
 
+def check_recall(upc: str, product_name: str = "", brand_name: str = "") -> Optional[dict]:
+    """
+    Check if a product has an active recall.
+
+    Two-step strategy (most FDA recalls don't include UPC barcodes):
+
+      Step 1 — Exact UPC match.
+        Works for the ~20% of FDA records that contain a barcode in code_info.
+
+      Step 2 — Fuzzy product name match (fallback).
+        Uses pg_trgm similarity to compare the product name (from Open Food
+        Facts) against recall product_name.  Falls back to ILIKE substring
+        if pg_trgm isn't installed.
+
+    Returns formatted recall dict with match_method field, or None.
+    """
+    # ── Step 1: Exact UPC match ───────────────────────────────────────────
+    rows = execute_query(
+        "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
+        (upc,),
+    )
+    if rows:
+        result = format_recall(rows[0])
+        result["match_method"] = "exact_upc"
+        return result
+
+    # ── Step 2: Fuzzy product name match ──────────────────────────────────
+    if not product_name:
+        return None
+
+    try:
+        # pg_trgm similarity — requires CREATE EXTENSION pg_trgm
+        rows = execute_query(
+            """
+            SELECT *,
+                   similarity(LOWER(product_name), LOWER(%s)) AS name_sim
+            FROM recalls
+            WHERE similarity(LOWER(product_name), LOWER(%s)) > 0.3
+               OR LOWER(product_name) LIKE '%%' || LOWER(%s) || '%%'
+            ORDER BY
+                similarity(LOWER(product_name), LOWER(%s)) DESC,
+                recall_date DESC
+            LIMIT 1;
+            """,
+            (product_name, product_name, product_name, product_name),
+        )
+        if rows:
+            result = format_recall(rows[0])
+            result["match_method"] = "fuzzy_name"
+            result["match_confidence"] = round(float(rows[0].get("name_sim", 0)), 2)
+            return result
+
+    except Exception as exc:
+        log.warning("Fuzzy recall check failed (pg_trgm may not be enabled): %s", exc)
+
+        # Fallback: simple ILIKE substring if pg_trgm not installed
+        try:
+            rows = execute_query(
+                """
+                SELECT * FROM recalls
+                WHERE LOWER(product_name) LIKE '%%' || LOWER(%s) || '%%'
+                ORDER BY recall_date DESC LIMIT 1;
+                """,
+                (product_name,),
+            )
+            if rows:
+                result = format_recall(rows[0])
+                result["match_method"] = "substring"
+                return result
+        except Exception:
+            pass
+
+    return None
+
+
 def _lookup_off(upc: str) -> Optional[dict]:
     """
     Fetch a product from Open Food Facts by UPC.
@@ -195,12 +270,12 @@ async def search_product(search: ProductSearch):
                 "message": "Product not found. Please enter the product details manually.",
             }
 
-        # 4. Check recalls on this UPC
-        recall_rows = execute_query(
-            "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-            (upc,),
+        # 4. Check recalls (exact UPC → fuzzy product name fallback)
+        recall_info = check_recall(
+            upc,
+            product_name=product.get("product_name") or "",
+            brand_name=product.get("brand_name") or "",
         )
-        recall_info = format_recall(recall_rows[0]) if recall_rows else None
 
         ingredients_raw = product.get("ingredients") or ""
         ingredients = [i.strip() for i in ingredients_raw.replace("|", ",").split(",") if i.strip()]
@@ -245,11 +320,11 @@ async def search_product(search: ProductSearch):
 
         results = []
         for product in rows:
-            recall_rows = execute_query(
-                "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-                (product["upc"],),
+            recall_info = check_recall(
+                product["upc"],
+                product_name=product.get("product_name") or "",
+                brand_name=product.get("brand_name") or "",
             )
-            recall_info = format_recall(recall_rows[0]) if recall_rows else None
 
             ingredients_raw = product.get("ingredients") or ""
             risk_report = analyse_product_risk(
@@ -305,12 +380,12 @@ async def submit_product(product: ManualProduct):
             },
         )
 
-    # Check recalls immediately
-    recall_rows = execute_query(
-        "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-        (upc,),
+    # Check recalls immediately (exact UPC → fuzzy name fallback)
+    recall_info = check_recall(
+        upc,
+        product_name=product.product_name,
+        brand_name=product.brand_name or "",
     )
-    recall_info = format_recall(recall_rows[0]) if recall_rows else None
 
     # Run risk analysis
     allergens: list[str] = []
@@ -354,10 +429,7 @@ async def get_all_recalls():
 @router.get("/api/recalls/check/{upc}")
 async def check_recall_for_upc(upc: str):
     """Check whether a specific UPC has an active recall."""
-    rows = execute_query(
-        "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
-        (upc,),
-    )
-    if rows:
-        return {"is_recalled": True, "recall_info": format_recall(rows[0])}
+    recall_info = check_recall(upc)
+    if recall_info:
+        return {"is_recalled": True, "recall_info": recall_info}
     return {"is_recalled": False, "recall_info": None}
