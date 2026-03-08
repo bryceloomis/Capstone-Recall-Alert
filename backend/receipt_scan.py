@@ -6,13 +6,15 @@ Production workflow:
   2. Run AWS Textract AnalyzeExpense to extract structured item names
      Fallback to DetectDocumentText if AnalyzeExpense returns no line items
   3. Clean OCR text into search-friendly receipt item names
-  4. Load recall candidates from the PostgreSQL `recalls` table
-  5. Match each cleaned receipt item directly against recall candidates
+  4. Save ALL cleaned items to the user's cart (source='receipt', no UPC)
+  5. Load recall candidates from the PostgreSQL `recalls` table
+  6. Match each cleaned receipt item against recall candidates
      using the matcher in fuzzy_recall_matcher.py
-  6. Return:
-       - matched   = receipt items that strongly match recall records
-       - unmatched = receipt items with no strong recall match
-       - total_lines = raw OCR line count
+  7. Return:
+       - matched_recalls  = items with a strong recall match (is_recalled=true)
+       - safe_items       = items added to cart with no current recall
+       - cart_items_added = count of rows inserted/already-present in user_carts
+       - total_lines      = raw OCR line count
 """
 
 from __future__ import annotations
@@ -20,9 +22,10 @@ from __future__ import annotations
 import asyncio
 import io
 import re
+from typing import Optional
 
 import boto3
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -119,6 +122,52 @@ def clean_receipt_item(raw: str) -> str:
     return cleaned
 
 
+# ── Cart helpers ───────────────────────────────────────────────────────────────
+
+def _parse_user_id(user_id: Optional[str]) -> Optional[int]:
+    """Return integer user_id or None for guests / invalid strings."""
+    if not user_id:
+        return None
+    try:
+        return int(user_id)
+    except (ValueError, TypeError):
+        return None
+
+
+def _save_receipt_items_to_cart(uid: int, items: list[dict]) -> int:
+    """
+    Upsert all receipt items into user_carts with source='receipt'.
+
+    Each item dict must have 'cleaned' (the display name).
+    Uses the partial unique index (user_id, product_name) WHERE product_upc IS NULL
+    for conflict detection, so duplicate receipt items are silently skipped.
+
+    Returns the number of rows actually inserted.
+    """
+    inserted = 0
+    for item in items:
+        name = item["cleaned"][:255]  # match column width
+        try:
+            result = execute_query(
+                """
+                INSERT INTO user_carts
+                    (user_id, product_upc, product_name, brand_name, source)
+                VALUES
+                    (%s, NULL, %s, '', 'receipt')
+                ON CONFLICT (user_id, product_name) WHERE product_upc IS NULL
+                DO NOTHING
+                RETURNING id;
+                """,
+                (uid, name),
+            )
+            if result:
+                inserted += 1
+        except Exception:
+            # Swallow individual failures so one bad item doesn't abort the rest
+            pass
+    return inserted
+
+
 # ── Recall candidate loading ──────────────────────────────────────────────────
 
 def _load_recall_candidates() -> list[RecallCandidate]:
@@ -163,32 +212,47 @@ def _load_recall_candidates() -> list[RecallCandidate]:
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.post("/api/receipt/scan")
-async def scan_receipt(file: UploadFile = File(...)):
+async def scan_receipt(
+    file: UploadFile = File(...),
+    user_id: Optional[str] = Form(None),
+):
     """
-    Process a receipt photo and return recall-matched items.
+    Process a receipt photo, save ALL items to the user's cart, and
+    return which items match active recalls.
+
+    Multipart form fields:
+      file    — the receipt image (JPEG, PNG, HEIC, etc.)
+      user_id — (optional) the signed-in user's integer ID.
+                If omitted or not a valid integer (e.g. 'test_user'),
+                the cart-save step is skipped.
 
     Response format:
     {
-      "matched": [
+      "matched_recalls": [
         {
           "raw_text": ...,
           "cleaned_text": ...,
           "upc": ...,
           "product_name": ...,
           "brand_name": ...,
-          "ingredients": [],
           "is_recalled": true,
-          "recall_info": {...},
-          "source": "fda_recall_match",
+          "recall_info": { "id", "reason", "recall_date", "severity",
+                           "firm_name", "source" },
           "match_score": 0.83,
           "matcher": "tfidf_hybrid"
         },
         ...
       ],
-      "unmatched": [...],
+      "safe_items": [
+        { "raw_text": ..., "cleaned_text": ..., "is_recalled": false },
+        ...
+      ],
+      "cart_items_added": N,
       "total_lines": N
     }
     """
+    uid = _parse_user_id(user_id)
+
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty file uploaded.")
@@ -233,9 +297,23 @@ async def scan_receipt(file: UploadFile = File(...)):
         cleaned_items.append({"raw": raw, "cleaned": cleaned})
 
     if not cleaned_items:
-        return {"matched": [], "unmatched": [], "total_lines": len(raw_items)}
+        return {
+            "matched_recalls": [],
+            "safe_items": [],
+            "cart_items_added": 0,
+            "total_lines": len(raw_items),
+        }
 
-    # Step 4: Load recall candidates and initialize matcher
+    # Step 4: Save ALL items to the user's cart (skip for guests)
+    cart_items_added = 0
+    if uid is not None:
+        try:
+            cart_items_added = _save_receipt_items_to_cart(uid, cleaned_items)
+        except Exception:
+            # Non-fatal: cart save failure doesn't abort the recall check
+            cart_items_added = 0
+
+    # Step 5: Load recall candidates and initialize matcher
     try:
         recall_candidates = _load_recall_candidates()
     except Exception as exc:
@@ -255,7 +333,7 @@ async def scan_receipt(file: UploadFile = File(...)):
             detail=f"Invalid recall matcher configuration: {exc}",
         )
 
-    # Step 5: Run matching
+    # Step 6: Run recall matching concurrently
     semaphore = asyncio.Semaphore(6)
 
     async def lookup(entry: dict):
@@ -272,8 +350,8 @@ async def scan_receipt(file: UploadFile = File(...)):
         return_exceptions=True,
     )
 
-    matched: list[dict] = []
-    unmatched: list[str] = []
+    matched_recalls: list[dict] = []
+    safe_items: list[dict] = []
 
     for result in results:
         if isinstance(result, Exception):
@@ -282,35 +360,38 @@ async def scan_receipt(file: UploadFile = File(...)):
         entry, match = result
 
         if match is None:
-            unmatched.append(entry["raw"])
+            safe_items.append({
+                "raw_text":    entry["raw"],
+                "cleaned_text": entry["cleaned"],
+                "is_recalled": False,
+            })
             continue
 
         c = match.candidate
-        matched.append(
+        matched_recalls.append(
             {
-                "raw_text": entry["raw"],
+                "raw_text":     entry["raw"],
                 "cleaned_text": entry["cleaned"],
-                "upc": c.upc,
+                "upc":          c.upc,
                 "product_name": c.product_name,
-                "brand_name": c.brand_name,
-                "ingredients": [],
-                "is_recalled": True,
+                "brand_name":   c.brand_name,
+                "is_recalled":  True,
                 "recall_info": {
-                    "id": c.id,
-                    "reason": c.reason,
+                    "id":          c.id,
+                    "reason":      c.reason,
                     "recall_date": c.recall_date,
-                    "severity": c.severity,
-                    "firm_name": c.firm_name,
-                    "source": c.source,
+                    "severity":    c.severity,
+                    "firm_name":   c.firm_name,
+                    "source":      c.source,
                 },
-                "source": "fda_recall_match",
                 "match_score": round(match.score, 4),
-                "matcher": match.algorithm,
+                "matcher":     match.algorithm,
             }
         )
 
     return {
-        "matched": matched,
-        "unmatched": unmatched,
-        "total_lines": len(raw_items),
+        "matched_recalls":  matched_recalls,
+        "safe_items":       safe_items,
+        "cart_items_added": cart_items_added,
+        "total_lines":      len(raw_items),
     }

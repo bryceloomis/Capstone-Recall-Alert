@@ -6,6 +6,11 @@ Two responsibilities:
      recall refresh. Finds users whose cart items match recalled products and
      writes rows to the alerts table.
 
+     Two matching strategies:
+       a) Exact UPC match — for barcode-scanned cart items (product_upc IS NOT NULL)
+       b) Fuzzy name match — for receipt-scanned cart items (product_upc IS NULL,
+          source='receipt'), using TFIDFHybridRecallMatcher from fuzzy_recall_matcher
+
   2. send_alert_email() — stub for emailing users when a new alert is created.
      TODO: implement with AWS SES or SendGrid.
 
@@ -27,23 +32,39 @@ router = APIRouter()
 
 # ── Alert generation ───────────────────────────────────────────────────────────
 
-def generate_alerts_for_new_recalls() -> int:
+def _insert_alert(user_id: int, recall_id: int, product_upc: str, product_name: str) -> bool:
+    """Insert a single alert row. Returns True if a new row was created."""
+    try:
+        result = execute_query(
+            """
+            INSERT INTO alerts (user_id, recall_id, product_upc, product_name, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT DO NOTHING
+            RETURNING id;
+            """,
+            (user_id, recall_id, product_upc, product_name),
+        )
+        return bool(result)
+    except Exception as exc:
+        log.warning(
+            "Could not insert alert user=%s recall=%s: %s",
+            user_id, recall_id, exc,
+        )
+        return False
+
+
+def _generate_upc_alerts() -> int:
     """
-    After importing new recalls, find users whose saved grocery items
-    match a recalled product and create alert rows for them.
-
-    Matches on product_upc (exact UPC) from user_carts vs recalls.upc.
-    Skips users who already have an alert for that recall.
-
-    Called by recall_update.run_recall_refresh() after each refresh.
-    Returns the number of new alert rows created.
+    Strategy A: exact UPC match.
+    Joins barcode-scanned cart items (product_upc IS NOT NULL) against recalls.upc.
+    Skips pairs that already have an alert row.
     """
     try:
         new_pairs = execute_query(
             """
             SELECT DISTINCT
                 uc.user_id,
-                r.id         AS recall_id,
+                r.id            AS recall_id,
                 uc.product_upc,
                 uc.product_name
             FROM user_carts uc
@@ -51,37 +72,150 @@ def generate_alerts_for_new_recalls() -> int:
                 ON uc.product_upc = r.upc
             LEFT JOIN alerts a
                 ON a.user_id = uc.user_id AND a.recall_id = r.id
-            WHERE a.id IS NULL;
+            WHERE uc.product_upc IS NOT NULL
+              AND a.id IS NULL;
             """
         )
-
-        count = 0
-        for pair in new_pairs:
-            try:
-                execute_query(
-                    """
-                    INSERT INTO alerts (user_id, recall_id, product_upc, created_at)
-                    VALUES (%s, %s, %s, NOW())
-                    ON CONFLICT DO NOTHING;
-                    """,
-                    (pair["user_id"], pair["recall_id"], pair["product_upc"]),
-                )
-                count += 1
-                # TODO: call send_alert_email() here once implemented
-                # send_alert_email(pair["user_id"], pair["product_name"])
-            except Exception as exc:
-                log.warning(
-                    "Could not insert alert for user=%s recall=%s: %s",
-                    pair["user_id"], pair["recall_id"], exc,
-                )
-
-        if count:
-            log.info("Generated %d new alerts.", count)
-        return count
-
     except Exception as exc:
-        log.error("generate_alerts_for_new_recalls error: %s", exc)
+        log.error("_generate_upc_alerts query error: %s", exc)
         return 0
+
+    count = 0
+    for pair in new_pairs:
+        if _insert_alert(
+            pair["user_id"], pair["recall_id"],
+            pair["product_upc"], pair.get("product_name") or "",
+        ):
+            count += 1
+            # TODO: send_alert_email(pair["user_id"], pair.get("product_name"))
+    return count
+
+
+def _generate_fuzzy_alerts() -> int:
+    """
+    Strategy B: fuzzy name match for receipt-sourced cart items.
+
+    Loads all receipt items (product_upc IS NULL) and all recall candidates,
+    then uses TFIDFHybridRecallMatcher to find matches above the 0.60 threshold.
+    Skips pairs that already have an alert row.
+
+    This mirrors the matching logic in receipt_scan.py but runs on a schedule
+    so that items added to carts BEFORE a recall was published are still caught.
+    """
+    from fuzzy_recall_matcher import RecallCandidate, get_matcher
+
+    # Load all receipt cart items that don't yet have ANY alert
+    try:
+        receipt_items = execute_query(
+            """
+            SELECT DISTINCT
+                uc.user_id,
+                uc.product_name
+            FROM user_carts uc
+            WHERE uc.product_upc IS NULL
+              AND uc.source = 'receipt';
+            """
+        )
+    except Exception as exc:
+        log.error("_generate_fuzzy_alerts: error loading receipt cart items: %s", exc)
+        return 0
+
+    if not receipt_items:
+        return 0
+
+    # Load all recall candidates
+    try:
+        rows = execute_query(
+            """
+            SELECT id, upc, product_name, brand_name,
+                   recall_date, reason, severity, firm_name, source
+            FROM recalls
+            ORDER BY recall_date DESC;
+            """
+        )
+    except Exception as exc:
+        log.error("_generate_fuzzy_alerts: error loading recalls: %s", exc)
+        return 0
+
+    if not rows:
+        return 0
+
+    candidates = [
+        RecallCandidate(
+            id=int(r["id"]),
+            upc=str(r.get("upc") or ""),
+            product_name=r.get("product_name") or "",
+            brand_name=r.get("brand_name") or "",
+            recall_date=str(r.get("recall_date") or ""),
+            reason=r.get("reason") or "",
+            severity=r.get("severity") or "",
+            firm_name=r.get("firm_name") or "",
+            source=r.get("source") or "FDA",
+        )
+        for r in rows
+    ]
+
+    try:
+        matcher = get_matcher("tfidf_hybrid", candidates)
+    except Exception as exc:
+        log.error("_generate_fuzzy_alerts: could not build matcher: %s", exc)
+        return 0
+
+    count = 0
+    for item in receipt_items:
+        match = matcher.best_match(item["product_name"], threshold=0.60)
+        if match is None:
+            continue
+
+        # Skip if this user already has an alert for this recall
+        try:
+            existing = execute_query(
+                "SELECT id FROM alerts WHERE user_id = %s AND recall_id = %s;",
+                (item["user_id"], match.candidate.id),
+            )
+            if existing:
+                continue
+        except Exception:
+            continue
+
+        if _insert_alert(
+            item["user_id"],
+            match.candidate.id,
+            match.candidate.upc,
+            item["product_name"],
+        ):
+            count += 1
+            log.info(
+                "Fuzzy recall alert: user=%s product='%s' → recall_id=%s score=%.2f",
+                item["user_id"], item["product_name"],
+                match.candidate.id, match.score,
+            )
+
+    return count
+
+
+def generate_alerts_for_new_recalls() -> int:
+    """
+    After importing new recalls, find users whose saved grocery items
+    match a recalled product and create alert rows for them.
+
+    Runs two strategies:
+      A) Exact UPC match  — barcode cart items (fast, SQL join)
+      B) Fuzzy name match — receipt cart items (in-memory, TF-IDF + RapidFuzz)
+
+    Called by recall_update.run_recall_refresh() after each refresh.
+    Returns the total number of new alert rows created.
+    """
+    upc_count   = _generate_upc_alerts()
+    fuzzy_count = _generate_fuzzy_alerts()
+    total = upc_count + fuzzy_count
+
+    if total:
+        log.info(
+            "Generated %d new alerts (%d UPC-match, %d fuzzy-match).",
+            total, upc_count, fuzzy_count,
+        )
+    return total
 
 
 # ── Email notification stub ────────────────────────────────────────────────────
