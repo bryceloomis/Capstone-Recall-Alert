@@ -9,3 +9,6 @@ boto3>=1.34.0
 requests>=2.31.0
 Pillow>=10.0.0
 apscheduler>=3.10.0
+rapidfuzz
+scikit-learn
+numpy
