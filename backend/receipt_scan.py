@@ -240,8 +240,7 @@ async def scan_receipt(file: UploadFile = File(...)):
             detail=f"Could not load recall candidates: {exc}",
         )
 
-    # TODO: swap to "tfidf_hybrid" once your teammate implements it in fuzzy_recall_matcher.py
-    matcher_name = "olivia_basic"
+    matcher_name = "tfidf_hybrid"
     matcher_threshold = 0.60
 
     try:
