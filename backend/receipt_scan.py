@@ -24,6 +24,10 @@ import re
 import boto3
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from PIL import Image
+from pillow_heif import register_heif_opener
+
+# Register HEIC/HEIF support so iPhone photos work out of the box
+register_heif_opener()
 
 from database import execute_query
 from fuzzy_recall_matcher import RecallCandidate, get_matcher
