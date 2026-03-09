@@ -219,18 +219,30 @@ _BENIGN: frozenset = frozenset({
 _memory_cache: dict[str, dict] = {}
 
 
-def _cache_key(token: str) -> str:
-    return hashlib.sha256(token.strip().lower().encode()).hexdigest()[:32]
+def _cache_key(token: str, context: str = "") -> str:
+    """
+    Cache key for disambiguation results.
+
+    Includes the full ingredient list as context because the same ambiguous
+    token can mean different things in different products:
+      "natural flavors" in a product with milk, butter, whey → likely dairy
+      "natural flavors" in a product with oats, corn, sugar  → likely plant
+
+    The key is: SHA-256(token + ingredient list) so the same product always
+    gets a cache hit, but different products get separate classifications.
+    """
+    combined = (token.strip().lower() + "|" + context.strip().lower())
+    return hashlib.sha256(combined.encode()).hexdigest()[:32]
 
 
-def _cache_get(token: str) -> Optional[dict]:
+def _cache_get(token: str, context: str = "") -> Optional[dict]:
     """
     Read from disambiguation_cache table, fallback to memory.
 
-    DB schema (see schema_migration_llm.sql):
+    DB schema:
       disambiguation_cache(token_hash PK, token, result_json JSONB, created_at)
     """
-    key = _cache_key(token)
+    key = _cache_key(token, context)
     try:
         from database import execute_query
         rows = execute_query(
@@ -247,9 +259,9 @@ def _cache_get(token: str) -> Optional[dict]:
     return _memory_cache.get(key)
 
 
-def _cache_set(token: str, result: dict) -> None:
+def _cache_set(token: str, result: dict, context: str = "") -> None:
     """Write to disambiguation_cache table + memory."""
-    key = _cache_key(token)
+    key = _cache_key(token, context)
     try:
         from database import execute_query
         execute_query(
@@ -398,11 +410,11 @@ def disambiguate_ingredients(
     if not ambiguous:
         return []
 
-    # Check cache
+    # Check cache (keyed on token + ingredient context)
     results: list[DisambiguationResult] = []
     uncached: list[str] = []
     for token in ambiguous:
-        cached = _cache_get(token)
+        cached = _cache_get(token, context=full_ingredients_text)
         if cached:
             try:
                 results.append(DisambiguationResult(**cached))
@@ -431,7 +443,7 @@ def disambiguate_ingredients(
                         is_animal_derived=item.get("is_animal_derived"),
                         reasoning=str(item.get("reasoning", "")),
                     )
-                    _cache_set(dr.token, dr.to_dict())
+                    _cache_set(dr.token, dr.to_dict(), context=full_ingredients_text)
                     results.append(dr)
                 except Exception as exc:
                     log.warning("Failed to parse disambiguation item: %s", exc)
