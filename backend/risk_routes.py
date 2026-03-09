@@ -180,6 +180,12 @@ async def scan_barcode_with_risk(
         enable_llm=enable_ai,
     )
 
+    # ── Build typed notifications for the frontend ────────────────────
+    #    All deterministic — no LLM involved.
+    #    Each notification has: type, severity, title, message
+    #    Frontend can render these as colored cards/banners directly.
+    notifications = _build_notifications(report)
+
     return {
         "found":       True,
         "product": {
@@ -194,6 +200,97 @@ async def scan_barcode_with_risk(
         # ── Decision-first UX ─────────────────────────────────────────
         "verdict":     report.verdict,
         "explanation": report.explanation,
+        "notifications": notifications,
         # ── Full structured detail (drill-down / analytics) ───────────
         "risk":        report.to_dict(),
     }
+
+
+# ── Notification builder (deterministic — no LLM) ─────────────────────────────
+
+# Gate/category → notification type and severity mapping
+_GATE_TO_NOTIFICATION = {
+    "RECALL":      ("RECALL",   "HIGH"),
+    "ALLERGEN":    ("ALLERGEN", "HIGH"),
+    "DIET_STRICT": ("DIET",    "HIGH"),
+}
+
+_CATEGORY_TO_NOTIFICATION = {
+    "CROSS_CONTACT":   ("ALLERGEN", "MEDIUM"),
+    "ADDITIVE":        ("ADDITIVE", "LOW"),
+    "DIET_SOFT":       ("DIET",     "MEDIUM"),
+    "LOW_CONFIDENCE":  ("WARNING",  "MEDIUM"),
+    "AMBIGUOUS":       ("WARNING",  "LOW"),
+}
+
+
+def _build_notifications(report) -> list[dict]:
+    """
+    Convert hard stops and caution signals into a flat, typed notification
+    array the frontend can render directly as colored cards or banners.
+
+    Each notification:
+      {
+        "type":     "RECALL" | "ALLERGEN" | "DIET" | "ADDITIVE" | "WARNING",
+        "severity": "HIGH" | "MEDIUM" | "LOW",
+        "title":    short headline for the card,
+        "message":  full explanation text
+      }
+
+    Ordered by severity: HIGH first, then MEDIUM, then LOW.
+    All deterministic — no LLM involved.
+    """
+    notifications: list[dict] = []
+
+    # Hard stops → HIGH severity notifications
+    for h in report.hard_stops:
+        ntype, severity = _GATE_TO_NOTIFICATION.get(h.gate, ("WARNING", "HIGH"))
+
+        if h.gate == "RECALL":
+            title = "Active Recall"
+        elif h.gate == "ALLERGEN":
+            # Extract allergen name from the reason text
+            title = "Allergen Detected"
+            for m in report.allergen_matches:
+                if m.matched_token in h.reason or m.allergen.lower() in h.reason.lower():
+                    title = f"Allergen: {m.allergen}"
+                    break
+        elif h.gate == "DIET_STRICT":
+            title = "Diet Violation"
+            for f in report.diet_flags:
+                if f.flagged_token in h.reason:
+                    title = f"Not {f.diet}"
+                    break
+        else:
+            title = "Warning"
+
+        notifications.append({
+            "type":     ntype,
+            "severity": severity,
+            "title":    title,
+            "message":  h.reason,
+        })
+
+    # Caution signals → MEDIUM/LOW severity notifications
+    for s in report.caution_signals:
+        ntype, severity = _CATEGORY_TO_NOTIFICATION.get(s.category, ("WARNING", "LOW"))
+
+        if s.category == "CROSS_CONTACT":
+            title = "Cross-Contact Advisory"
+        elif s.category == "ADDITIVE":
+            title = "Additive Flag"
+        elif s.category == "DIET_SOFT":
+            title = "Diet Preference"
+        elif s.category == "LOW_CONFIDENCE":
+            title = "Low Confidence"
+        else:
+            title = "Note"
+
+        notifications.append({
+            "type":     ntype,
+            "severity": severity,
+            "title":    title,
+            "message":  s.detail,
+        })
+
+    return notifications
