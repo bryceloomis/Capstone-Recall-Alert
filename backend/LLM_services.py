@@ -470,11 +470,9 @@ RULES:
 
 Return exactly this JSON structure:
 {
-  "headline": "2-5 word summary (e.g. 'Possible Listeria contamination')",
+  "headline": "2-5 word summarizing the recall reason (e.g. 'Possible Listeria contamination')",
   "what_happened": "1-2 sentences: what is wrong with this product",
-  "what_to_do": "1-2 sentences: specific action the consumer should take",
   "who_is_at_risk": "1 sentence: who should be especially careful",
-  "severity_plain": "1 sentence explaining the recall class in plain language"
 }\
 """
 
