@@ -76,22 +76,54 @@ def format_recall(row: dict) -> dict:
         "distribution":          row.get("distribution_pattern") or "",
     }
 
+import re
+from typing import Optional
+
+def normalize_product_name(name: str) -> str:
+    """Normalize product names for fuzzy comparison."""
+    if not name:
+        return ""
+    name = name.lower()
+    name = re.sub(r"[®™©]", "", name)
+    name = re.sub(r"[^a-z0-9\s]", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def word_overlap_score(a: str, b: str) -> float:
+    """
+    Return proportion of words in the shorter phrase that appear in the longer phrase.
+    Example:
+      'ritz crackers' vs 'nabisco ritz original crackers' -> 1.0
+    """
+    words_a = set(re.findall(r"[a-z0-9]+", normalize_product_name(a)))
+    words_b = set(re.findall(r"[a-z0-9]+", normalize_product_name(b)))
+
+    noise = {
+        "oz", "fl", "ct", "pk", "lb", "g", "kg", "ml",
+        "the", "and", "or", "of", "in", "a"
+    }
+    words_a -= noise
+    words_b -= noise
+
+    if not words_a or not words_b:
+        return 0.0
+
+    shorter, longer = (words_a, words_b) if len(words_a) <= len(words_b) else (words_b, words_a)
+    return len(shorter & longer) / len(shorter)
 
 def check_recall(upc: str, product_name: str = "", brand_name: str = "") -> Optional[dict]:
     """
     Check if a product has an active recall.
 
-    Two-step strategy (most FDA recalls don't include UPC barcodes):
+    Matching strategy:
+      Step 1 — Exact UPC match
+      Step 2 — Fuzzy product-name match:
+          similarity >= 0.35
+          OR substring match
+          OR word overlap >= 1.0
 
-      Step 1 — Exact UPC match.
-        Works for the ~20% of FDA records that contain a barcode in code_info.
-
-      Step 2 — Fuzzy product name match (fallback).
-        Uses pg_trgm similarity to compare the product name (from Open Food
-        Facts) against recall product_name.  Falls back to ILIKE substring
-        if pg_trgm isn't installed.
-
-    Returns formatted recall dict with match_method field, or None.
+    Returns formatted recall dict with match metadata, or None.
     """
     # ── Step 1: Exact UPC match ───────────────────────────────────────────
     rows = execute_query(
@@ -101,55 +133,207 @@ def check_recall(upc: str, product_name: str = "", brand_name: str = "") -> Opti
     if rows:
         result = format_recall(rows[0])
         result["match_method"] = "exact_upc"
+        result["match_confidence"] = 1.0
         return result
 
     # ── Step 2: Fuzzy product name match ──────────────────────────────────
     if not product_name:
         return None
 
+    normalized_input = normalize_product_name(product_name)
+    if not normalized_input:
+        return None
+
     try:
-        # pg_trgm similarity — requires CREATE EXTENSION pg_trgm
+        # Pull a candidate set using pg_trgm and substring.
+        # Then score word overlap in Python.
         rows = execute_query(
             """
             SELECT *,
                    similarity(LOWER(product_name), LOWER(%s)) AS name_sim
             FROM recalls
-            WHERE similarity(LOWER(product_name), LOWER(%s)) > 0.3
+            WHERE similarity(LOWER(product_name), LOWER(%s)) >= 0.35
                OR LOWER(product_name) LIKE '%%' || LOWER(%s) || '%%'
+               OR LOWER(%s) LIKE '%%' || LOWER(product_name) || '%%'
             ORDER BY
                 similarity(LOWER(product_name), LOWER(%s)) DESC,
                 recall_date DESC
-            LIMIT 1;
+            LIMIT 25;
             """,
-            (product_name, product_name, product_name, product_name),
+            (product_name, product_name, product_name, product_name, product_name),
         )
-        if rows:
-            result = format_recall(rows[0])
-            result["match_method"] = "fuzzy_name"
-            result["match_confidence"] = round(float(rows[0].get("name_sim", 0)), 2)
+
+        best_match = None
+        best_score = -1.0
+
+        for row in rows:
+            recall_name = row.get("product_name") or ""
+            normalized_recall = normalize_product_name(recall_name)
+
+            sim = float(row.get("name_sim", 0.0))
+            substring_hit = (
+                normalized_input in normalized_recall
+                or normalized_recall in normalized_input
+            )
+            overlap = word_overlap_score(normalized_input, normalized_recall)
+
+            matched = (
+                sim >= 0.40
+                or substring_hit
+                or overlap >= 1.0
+            )
+
+            if not matched:
+                continue
+
+            # Rank candidates:
+            # exact-ish substring/overlap first, then trigram, then recent recall_date
+            rank_score = max(
+                1.0 if substring_hit else 0.0,
+                overlap,
+                sim,
+            )
+
+            if rank_score > best_score:
+                best_score = rank_score
+                best_match = (row, sim, substring_hit, overlap)
+
+        if best_match:
+            row, sim, substring_hit, overlap = best_match
+            result = format_recall(row)
+
+            if substring_hit:
+                result["match_method"] = "substring"
+                result["match_confidence"] = 1.0
+            elif overlap >= 1.0:
+                result["match_method"] = "word_overlap"
+                result["match_confidence"] = 1.0
+            else:
+                result["match_method"] = "fuzzy_name"
+                result["match_confidence"] = round(sim, 2)
+
+            result["name_similarity"] = round(sim, 3)
+            result["word_overlap"] = round(overlap, 3)
             return result
 
     except Exception as exc:
         log.warning("Fuzzy recall check failed (pg_trgm may not be enabled): %s", exc)
 
-        # Fallback: simple ILIKE substring if pg_trgm not installed
+        # Fallback if pg_trgm is unavailable:
+        # use substring + Python word overlap only
         try:
             rows = execute_query(
                 """
                 SELECT * FROM recalls
                 WHERE LOWER(product_name) LIKE '%%' || LOWER(%s) || '%%'
-                ORDER BY recall_date DESC LIMIT 1;
+                   OR LOWER(%s) LIKE '%%' || LOWER(product_name) || '%%'
+                ORDER BY recall_date DESC
+                LIMIT 25;
                 """,
-                (product_name,),
+                (product_name, product_name),
             )
-            if rows:
-                result = format_recall(rows[0])
-                result["match_method"] = "substring"
+
+            best_match = None
+            for row in rows:
+                recall_name = row.get("product_name") or ""
+                normalized_recall = normalize_product_name(recall_name)
+
+                substring_hit = (
+                    normalized_input in normalized_recall
+                    or normalized_recall in normalized_input
+                )
+                overlap = word_overlap_score(normalized_input, normalized_recall)
+
+                if substring_hit or overlap >= 1.0:
+                    best_match = (row, substring_hit, overlap)
+                    break
+
+            if best_match:
+                row, substring_hit, overlap = best_match
+                result = format_recall(row)
+                result["match_method"] = "substring" if substring_hit else "word_overlap"
+                result["match_confidence"] = 1.0
+                result["word_overlap"] = round(overlap, 3)
                 return result
-        except Exception:
-            pass
+
+        except Exception as fallback_exc:
+            log.warning("Fallback fuzzy recall check failed: %s", fallback_exc)
 
     return None
+
+# def check_recall(upc: str, product_name: str = "", brand_name: str = "") -> Optional[dict]:
+#     """
+#     Check if a product has an active recall.
+
+#     Two-step strategy (most FDA recalls don't include UPC barcodes):
+
+#       Step 1 — Exact UPC match.
+#         Works for the ~20% of FDA records that contain a barcode in code_info.
+
+#       Step 2 — Fuzzy product name match (fallback).
+#         Uses pg_trgm similarity to compare the product name (from Open Food
+#         Facts) against recall product_name.  Falls back to ILIKE substring
+#         if pg_trgm isn't installed.
+
+#     Returns formatted recall dict with match_method field, or None.
+#     """
+#     # ── Step 1: Exact UPC match ───────────────────────────────────────────
+#     rows = execute_query(
+#         "SELECT * FROM recalls WHERE upc = %s ORDER BY recall_date DESC LIMIT 1;",
+#         (upc,),
+#     )
+#     if rows:
+#         result = format_recall(rows[0])
+#         result["match_method"] = "exact_upc"
+#         return result
+
+#     # ── Step 2: Fuzzy product name match ──────────────────────────────────
+#     if not product_name:
+#         return None
+
+#     try:
+#         # pg_trgm similarity — requires CREATE EXTENSION pg_trgm
+#         rows = execute_query(
+#             """
+#             SELECT *,
+#                    similarity(LOWER(product_name), LOWER(%s)) AS name_sim
+#             FROM recalls
+#             WHERE similarity(LOWER(product_name), LOWER(%s)) > 0.35
+#                OR LOWER(product_name) LIKE '%%' || LOWER(%s) || '%%'
+#             ORDER BY
+#                 similarity(LOWER(product_name), LOWER(%s)) DESC,
+#                 recall_date DESC
+#             LIMIT 1;
+#             """,
+#             (product_name, product_name, product_name, product_name),
+#         )
+#         if rows:
+#             result = format_recall(rows[0])
+#             result["match_method"] = "fuzzy_name"
+#             result["match_confidence"] = round(float(rows[0].get("name_sim", 0)), 2)
+#             return result
+
+#     except Exception as exc:
+#         log.warning("Fuzzy recall check failed (pg_trgm may not be enabled): %s", exc)
+
+#         # Fallback: simple ILIKE substring if pg_trgm not installed
+#         try:
+#             rows = execute_query(
+#                 """
+#                 SELECT * FROM recalls
+#                 WHERE LOWER(product_name) LIKE '%%' || LOWER(%s) || '%%'
+#                 ORDER BY recall_date DESC LIMIT 1;
+#                 """,
+#                 (product_name,),
+#             )
+#             if rows:
+#                 result = format_recall(rows[0])
+#                 result["match_method"] = "substring"
+#                 return result
+#         except Exception:
+#             pass
+
+#     return None
 
 
 def _lookup_off(upc: str) -> Optional[dict]:
