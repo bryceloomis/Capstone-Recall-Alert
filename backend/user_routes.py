@@ -157,7 +157,7 @@ async def get_user_profile(user_id: int):
         raise HTTPException(status_code=404, detail="User not found.")
     u = rows[0]
     return {
-        "user_id":          u["id"],
+        "id":               u["id"],
         "name":             u["name"],
         "email":            u["email"],
         "state":            u.get("state"),
