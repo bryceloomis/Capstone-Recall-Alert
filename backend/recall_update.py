@@ -43,7 +43,8 @@ try:
 except Exception:
     _explain_recall = None
 from user_alerts import generate_alerts_for_new_recalls
-
+from LLM_services import llm_get_upc as _llm_get_upc
+from LLM_services import llm_get_location as _llm_get_location
 
 log = logging.getLogger(__name__)
 
@@ -55,118 +56,203 @@ FDA_ENFORCEMENT_URL = "https://api.fda.gov/food/enforcement.json"
 REQUEST_TIMEOUT     = 15   # seconds
 RECALL_PAGE_LIMIT   = 100  # records per FDA API page (max 1000)
 
-# ── FDA fetch ──────────────────────────────────────────────────────────────────
+# ── Field mappers ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def fetch_fda_recalls(limit: int = RECALL_PAGE_LIMIT, skip: int = 0) -> list[dict]:
-    """
-    Fetch food recall enforcement records from the openFDA API.
+#extract UPC formulaically
+def get_upc(text):
+    #get upc indices
+    start = 0
+    indices = []
+    while True:
+        start = text.lower().find('upc', start)
+        if start == -1:
+            break
+        indices.append(start)
+        start += len('upc')
 
-    Reference: https://open.fda.gov/apis/food/enforcement/
-    Returns raw list of FDA enforcement records (dicts).
+    upc_list = []
+    for i in indices:
+        n = 0
+        c = 0
+        upc = ""
 
-    To paginate all results, call repeatedly with increasing `skip`:
-        page 1: skip=0,   limit=100
-        page 2: skip=100, limit=100
-        ...until results is shorter than limit.
-    """
-    try:
-        resp = req.get(
-            FDA_ENFORCEMENT_URL,
-            params={
-                "limit": limit,
-                "skip":  skip,
-                # Optional: filter to voluntary recalls only
-                # "search": "voluntary_mandated:Voluntary",
-            },
-            headers={"User-Agent": "FoodRecallAlert/0.2"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("results", [])
-    except Exception as exc:
-        log.error("FDA API fetch error (skip=%d): %s", skip, exc)
-        return []
+        #get the upcs
+        while (n < 12) & ((i + c) < len(text)):
+            char = text[i+c]
+            c = c + 1
+            if char.isdigit():
+                n = n + 1
+                upc = upc + char
+        if len(upc) == 12:
+          upc_list.append(upc)
+    return upc_list
 
 
-# ── Field mappers ──────────────────────────────────────────────────────────────
+def combined_upc(brand_product, code_information):
+    upc = []
+    for i in np.arange(0, len(brand_product):
+        brand_product_upc = [get_upc(x) for x in brand_product]
+        code_information_upc = [get_upc(x) for x in code_information]
 
-def _extract_upc_from_code_info(code_info: str) -> Optional[str]:
-    """
-    Try to pull a 12- or 13-digit UPC/EAN from FDA's free-text code_info field.
-    Returns the first match, or None if none found.
-    """
-    if not code_info:
-        return None
-    match = re.search(r"\b(\d{12,13})\b", code_info)
-    return match.group(1) if match else None
-
-
-def map_fda_to_db(record: dict) -> Optional[dict]:
-    """
-    Map a raw FDA enforcement record to our recalls table schema.
-
-    FDA fields used:
-      product_description  → product_name
-      recalling_firm        → firm_name
-      recall_initiation_date → recall_date   (format: YYYYMMDD → YYYY-MM-DD)
-      reason_for_recall     → reason
-      classification        → severity       (Class I / II / III)
-      distribution_pattern  → distribution_pattern
-      code_info             → UPC extraction attempt
-      status                → filter: skip "Terminated" recalls
-
-    Returns None if the record is missing critical fields.
-    """
-    # Skip terminated / archived recalls
-    if (record.get("status") or "").lower() in ("terminated", "completed", "closed"):
-        return None
-
-    product_name = (record.get("product_description") or "").strip()
-    if not product_name:
-        return None
-
-    # Parse YYYYMMDD → YYYY-MM-DD
-    raw_date = record.get("recall_initiation_date") or ""
-    try:
-        recall_date = datetime.strptime(raw_date, "%Y%m%d").strftime("%Y-%m-%d")
-    except ValueError:
-        recall_date = raw_date or datetime.now().strftime("%Y-%m-%d")
-
-    upc = _extract_upc_from_code_info(record.get("code_info") or "")
-
-    # If no UPC found, use the recall number as a synthetic key
-    # so the upsert still has something unique to ON CONFLICT on.
-    if not upc:
-        recall_number = (record.get("recall_number") or "").strip()
-        upc = f"FDA-{recall_number}" if recall_number else None
-
-    if not upc:
-        return None
-
-    return {
-        "upc":                 upc,
-        "product_name":        product_name[:500],   # match column width
-        "brand_name":          (record.get("recalling_firm") or "")[:200],
-        "recall_date":         recall_date,
-        "reason":              (record.get("reason_for_recall") or "")[:1000],
-        "severity":            (record.get("classification") or "")[:50],
-        "distribution_pattern":(record.get("distribution_pattern") or "")[:500],
-        "source":              "FDA",
-    }
+    #use formulaic UPC extraction first, LLM extraction later
+    if brand_product_upc[i] != []:
+        upc.append(brand_product_upc[i])
+    elif code_information_upc[i] != []:
+        upc.append(code_information_upc[i])
+    else:
+        brand_product_upc_llm = llm_get_upc(str(brand_product[i]))
+        code_information_upc_llm = llm_get_upc(str(code_information[i]))
+        if brand_product_upc_llm != []:
+            upc.append(brand_product_upc_llm)
+        elif code_information_upc_llm != []:
+            upc.append(code_information_upc_llm)
+        else:
+            upc.append('')
+    return upc
 
 
-# ── DB upsert ──────────────────────────────────────────────────────────────────
+# ── FDA fetch ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def upsert_recall(record: dict) -> bool:
-    """
-    Insert a recall record, or update it if (upc, recall_date) already exists.
-    Returns True if a new row was inserted, False if it was an update/no-op.
+# def fetch_fda_recalls(limit: int = RECALL_PAGE_LIMIT, skip: int = 0) -> list[dict]:
+#     """
+#     Fetch food recall enforcement records from the openFDA API.
 
-    Requires the unique constraint:
-      ALTER TABLE recalls
-        ADD CONSTRAINT recalls_upc_date_unique UNIQUE (upc, recall_date);
-    """
+#     Reference: https://open.fda.gov/apis/food/enforcement/
+#     Returns raw list of FDA enforcement records (dicts).
+
+#     To paginate all results, call repeatedly with increasing `skip`:
+#         page 1: skip=0,   limit=100
+#         page 2: skip=100, limit=100
+#         ...until results is shorter than limit.
+#     """
+#     try:
+#         resp = req.get(
+#             FDA_ENFORCEMENT_URL,
+#             params={
+#                 "limit": limit,
+#                 "skip":  skip,
+#                 # Optional: filter to voluntary recalls only
+#                 # "search": "voluntary_mandated:Voluntary",
+#             },
+#             headers={"User-Agent": "FoodRecallAlert/0.2"},
+#             timeout=REQUEST_TIMEOUT,
+#         )
+#         resp.raise_for_status()
+#         data = resp.json()
+#         return data.get("results", [])
+#     except Exception as exc:
+#         log.error("FDA API fetch error (skip=%d): %s", skip, exc)
+#         return []
+
+def fetch_new_recall_initiation():
+    dt1 = (date.today() - timedelta(days = 14)).strftime("%Y%m%d")
+    dt2 = (date.today()).strftime("%Y%m%d")
+    fda_initiated_url = f"https://api.fda.gov/food/enforcement.json?search=recall_initiation_date:[{dt1}+TO+{dt2}]+AND+status:'Ongoing'&limit=1000"
+    fda_initiated = req.get(fda_initiated_url).json()
+
+    #convert API output into dataframe
+    if fda_initiated == {'error': {'code': 'NOT_FOUND', 'message': 'No matches found!'}}:
+        item_dict = ''
+    else:
+        for i in np.arange(0, len(fda_initiated['results'])):
+            date = datetime.strptime(fda_initiated['results'][i]['termination_date'], '%Y%m%d').date()
+            brand_product = fda_initiated['results'][i]['recalling_firm'] + ' ' + fda_initiated['results'][i]['product_description']
+            code_information = fda_initiated['results'][i]['code_info']
+            distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
+            item_dict = {"upc":combined_upc(brand_product, code_information),
+                         "product_name":fda_initiated['results'][i]['product_description'],
+                         "brand_name":fda_initiated['results'][i]['recalling_firm'],
+                         "recall_date":date,
+                         "reason":fda_initiated['results'][i]['reason_for_recall'],
+                         "severity":fda_initiated['results'][i]['classification'],
+                         "distribution_pattern":llm_get_location(distribution_pattern),
+                         "source":"fda"}
+    return item_dict
+
+def fetch_new_recall_termination():
+    dt1 = (date.today() - timedelta(days = 14)).strftime("%Y%m%d")
+    dt2 = (date.today()).strftime("%Y%m%d")
+    fda_terminated_url = f"https://api.fda.gov/food/enforcement.json?search=termination_date:[{dt1}+TO+{dt2}]+AND+status:'Terminated'&limit=1000"
+    fda_terminated = req.get(fda_terminated_url).json()
+    
+    if fda_terminated == {'error': {'code': 'NOT_FOUND', 'message': 'No matches found!'}}:
+        item_dict = ''
+    else:
+        for i in np.arange(0, len(fda_terminated['results'])):
+            item_dict = {"product_name":fda_terminated['results'][i]['product_description'],
+                         "brand_name":fda_terminated['results'][i]['recalling_firm']}
+    return item_dict
+
+# ── Field mappers ─────────────────────────────────────────────────────────────────────────────────────
+
+# def _extract_upc_from_code_info(code_info: str) -> Optional[str]:
+#     """
+#     Try to pull a 12- or 13-digit UPC/EAN from FDA's free-text code_info field.
+#     Returns the first match, or None if none found.
+#     """
+#     if not code_info:
+#         return None
+#     match = re.search(r"\b(\d{12,13})\b", code_info)
+#     return match.group(1) if match else None
+
+# def map_fda_to_db(record: dict) -> Optional[dict]:
+#     """
+#     Map a raw FDA enforcement record to our recalls table schema.
+
+#     FDA fields used:
+#       product_description  → product_name
+#       recalling_firm        → firm_name
+#       recall_initiation_date → recall_date   (format: YYYYMMDD → YYYY-MM-DD)
+#       reason_for_recall     → reason
+#       classification        → severity       (Class I / II / III)
+#       distribution_pattern  → distribution_pattern
+#       code_info             → UPC extraction attempt
+#       status                → filter: skip "Terminated" recalls
+
+#     Returns None if the record is missing critical fields.
+#     """
+#     # Skip terminated / archived recalls
+#     if (record.get("status") or "").lower() in ("terminated", "completed", "closed"):
+#         return None
+
+#     product_name = (record.get("product_description") or "").strip()
+#     if not product_name:
+#         return None
+
+#     # Parse YYYYMMDD → YYYY-MM-DD
+#     raw_date = record.get("recall_initiation_date") or ""
+#     try:
+#         recall_date = datetime.strptime(raw_date, "%Y%m%d").strftime("%Y-%m-%d")
+#     except ValueError:
+#         recall_date = raw_date or datetime.now().strftime("%Y-%m-%d")
+
+#     upc = _extract_upc_from_code_info(record.get("code_info") or "")
+
+#     # If no UPC found, use the recall number as a synthetic key
+#     # so the upsert still has something unique to ON CONFLICT on.
+#     if not upc:
+#         recall_number = (record.get("recall_number") or "").strip()
+#         upc = f"FDA-{recall_number}" if recall_number else None
+
+#     if not upc:
+#         return None
+
+#     return {
+#         "upc":                 upc,
+#         "product_name":        product_name[:500],   # match column width
+#         "brand_name":          (record.get("recalling_firm") or "")[:200],
+#         "recall_date":         recall_date,
+#         "reason":              (record.get("reason_for_recall") or "")[:1000],
+#         "severity":            (record.get("classification") or "")[:50],
+#         "firm_name":           (record.get("recalling_firm") or "")[:200],
+#         "distribution_pattern":(record.get("distribution_pattern") or "")[:500],
+#         "source":              "FDA",
+#     }
+
+
+# ── DB upsert ──────────────────────────────────────────────────────────────────────────────────────────────
+
+def add_item_recall(record: dict) -> bool:
     try:
         result = execute_query(
             """
@@ -175,12 +261,11 @@ def upsert_recall(record: dict) -> bool:
                severity, distribution_pattern, source)
             VALUES
               (%(upc)s, %(product_name)s, %(brand_name)s, %(recall_date)s,
-               %(reason)s, %(severity)s, %(distribution_pattern)s,
-               %(source)s)
-            ON CONFLICT (upc, recall_date)
+               %(reason)s, %(severity)s, %(distribution_pattern)s, %(source)s)
+            ON CONFLICT (product_name, brand_name)
             DO UPDATE SET
-              product_name        = EXCLUDED.product_name,
-              brand_name          = EXCLUDED.brand_name,
+              upc                 = EXCLUDED.upc
+              recall_date         = EXCLUDED.recall_date,
               reason              = EXCLUDED.reason,
               severity            = EXCLUDED.severity,
               distribution_pattern = EXCLUDED.distribution_pattern,
@@ -192,8 +277,62 @@ def upsert_recall(record: dict) -> bool:
         # xmax = 0 means the row was freshly inserted (not updated)
         return bool(result and result[0].get("inserted"))
     except Exception as exc:
-        log.error("upsert_recall error for upc=%s: %s", record.get("upc"), exc)
+        log.error("upsert_recall error for product_name=%s: %s", record.get("product_name"), exc)
         return False
+
+
+def remove_item_recall(record: dict) -> bool:
+    try:
+        result = execute_query(
+            """
+            DELETE FROM recalls
+            WHERE product_name == %(product_name)s AND brand_name == %(brand_name)s
+            """,
+            record,
+        )
+        # xmax = 0 means the row was freshly inserted (not updated)
+        return True
+    except Exception as exc:
+        log.error("remove_item_recall error for product_name=%s: %s", record.get("product_name"), exc)
+        return False
+    
+# def upsert_recall(record: dict) -> bool:
+#     """
+#     Insert a recall record, or update it if (upc, recall_date) already exists.
+#     Returns True if a new row was inserted, False if it was an update/no-op.
+
+#     Requires the unique constraint:
+#       ALTER TABLE recalls
+#         ADD CONSTRAINT recalls_upc_date_unique UNIQUE (upc, recall_date);
+#     """
+#     try:
+#         result = execute_query(
+#             """
+#             INSERT INTO recalls
+#               (upc, product_name, brand_name, recall_date, reason,
+#                severity, firm_name, distribution_pattern, source)
+#             VALUES
+#               (%(upc)s, %(product_name)s, %(brand_name)s, %(recall_date)s,
+#                %(reason)s, %(severity)s, %(firm_name)s, %(distribution_pattern)s,
+#                %(source)s)
+#             ON CONFLICT (upc, recall_date)
+#             DO UPDATE SET
+#               product_name        = EXCLUDED.product_name,
+#               brand_name          = EXCLUDED.brand_name,
+#               reason              = EXCLUDED.reason,
+#               severity            = EXCLUDED.severity,
+#               firm_name           = EXCLUDED.firm_name,
+#               distribution_pattern = EXCLUDED.distribution_pattern,
+#               source              = EXCLUDED.source
+#             RETURNING (xmax = 0) AS inserted;
+#             """,
+#             record,
+#         )
+#         # xmax = 0 means the row was freshly inserted (not updated)
+#         return bool(result and result[0].get("inserted"))
+#     except Exception as exc:
+#         log.error("upsert_recall error for upc=%s: %s", record.get("upc"), exc)
+#         return False
 
 
 # ── LLM recall explainer ───────────────────────────────────────────────────
@@ -223,6 +362,7 @@ def _generate_recall_summary(recall_record: dict) -> None:
             product_name=recall_record.get("product_name", ""),
             reason=recall_record.get("reason", ""),
             severity=recall_record.get("severity", ""),
+            firm_name=recall_record.get("firm_name", ""),
             distribution=recall_record.get("distribution_pattern", ""),
         )
         if explanation:
@@ -262,28 +402,48 @@ def run_recall_refresh() -> dict:
     log.info("Starting recall refresh...")
     inserted = 0
     skipped  = 0
+    removed = 0
+    removed_skipped = 0
     errors   = []
 
     # ── FDA ───────────────────────────────────────────────────────────────────
-    fda_raw = fetch_fda_recalls()
-    log.info("FDA: fetched %d raw records.", len(fda_raw))
-
-    for raw in fda_raw:
-        mapped = map_fda_to_db(raw)
-        if not mapped:
-            skipped += 1
-            continue
-        was_inserted = upsert_recall(mapped)
+    initiated_items = fetch_new_recall_initiation()
+    log.info("FDA: fetched %d raw records.", len(new_items))
+    for fda_item in initiated_items:
+        was_inserted = add_item_recall(fda_item)
         if was_inserted:
             inserted += 1
-            # ── Generate plain-language summary via LLM ───────────────
-            #    Called once per NEW recall only (not updates).
-            #    Result stored in recalls.plain_language_summary JSONB.
-            #    If Bedrock is unavailable, the raw FDA text is still there.
-            #    See llm_service.py → explain_recall() for full docs.
-            _generate_recall_summary(mapped)
+            _generate_recall_summary(fda_item)
         else:
             skipped += 1
+
+    terminated_items = fetch_new_recall_termination():
+    for fda_item in terminated_items:
+        was_removed = remove_item_recall(fda_item)
+        if was_removed:
+            removed += 1
+        else:
+            removed_skipped += 1
+    
+    # fda_raw = fetch_fda_recalls()
+    # log.info("FDA: fetched %d raw records.", len(fda_raw))
+
+    # for raw in fda_raw:
+    #     mapped = map_fda_to_db(raw)
+    #     if not mapped:
+    #         skipped += 1
+    #         continue
+    #     was_inserted = upsert_recall(mapped)
+    #     if was_inserted:
+    #         inserted += 1
+    #         # ── Generate plain-language summary via LLM ───────────────
+    #         #    Called once per NEW recall only (not updates).
+    #         #    Result stored in recalls.plain_language_summary JSONB.
+    #         #    If Bedrock is unavailable, the raw FDA text is still there.
+    #         #    See llm_service.py → explain_recall() for full docs.
+    #         _generate_recall_summary(mapped)
+    #     else:
+    #         skipped += 1
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     alerts_generated = generate_alerts_for_new_recalls()
@@ -292,7 +452,7 @@ def run_recall_refresh() -> dict:
         "inserted":         inserted,
         "skipped":          skipped,
         "alerts_generated": alerts_generated,
-        "sources":          ["FDA"],
+        "sources":          ["fda"],
         "errors":           errors,
         "timestamp":        datetime.now().isoformat(),
     }

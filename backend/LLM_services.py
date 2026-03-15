@@ -533,3 +533,96 @@ def explain_recall(
             log.warning("Failed to parse recall explanation: %s", exc)
 
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  4. EXTRACT UPC with LLM from FDA DATA
+# ═══════════════════════════════════════════════════════════════════════════════
+_UPC_SYSTEM = """\
+You are a machine used to extract information from text. Please extract the UPC from the the text below. The UPC will be identified by the word "UPC". Please return all numbers that follow the "UPC" identifier. Only return numbers. Do NOT include any additional characters or text. Do NOT include spaces or dashes in between the numbers. Do NOT include quotation marks.
+
+Return the UPC in a list. 
+If there is more than one UPC in the text, please return all UPCs in a list.
+If there is no UPC included in the text, please return an empty list.
+
+Here are three examples
+##
+Example 1: UPC# 8 06795 61441 1 Fresh & Ready Foods LLC
+Please return: [806795614411]
+##
+
+##
+Example 2: Single Serve Paleta 3.75oz UPC: 7-67778-00001-3 Tropicale Foods, LLC
+Please return: [767778000013]
+##
+
+##
+Example 3: 14019 Cucumber Select 6 CT, 01034 Cucumber Select 5# packaged in polybags Dairyland Produce, LLC HARDIES FRESH FOODS
+Please return: []
+##
+
+##
+Example 4: UPC#: 011110641182; 829944010612; 041512179471; 829944010698; 8299440106636 Southwind Foods LLC dba
+Please return: [011110641182, 829944010612, 041512179471, 829944010698, 8299440106636]
+##
+
+Please extract the UPC from this text and return exactly one list.
+If there is a UPC, return them in a list with NO additional text.
+If there is no UPC, return an empty list and NO additional text.
+Do NOT include any additional text explaining the process.
+\
+"""
+
+def llm_get_upc(prompt):
+    raw_upc = _invoke_bedrock(_UPC_SYSTEM, prompt, max_tokens=512)
+    parsed = _parse_json_response(raw_upc)
+
+    if isinstance(parsed, str):
+        return parsed
+    else:
+        return ''
+    
+# ═══════════════════════════════════════════════════════════════════════════════
+#  5. EXTRACT LOCATION with LLM from FDA DATA
+# ═══════════════════════════════════════════════════════════════════════════════
+_LOCATION_SYSTEM = """\
+Please extract the two letter state codes from the the text below. If there is more than one state included in the text, please return all two letter state codes in a list.
+If the entire name of the state is included, return the two letter state code.
+If the text references "nationwide", "USA", "U.S.", "US", or "United States" then please return "USA".
+If the text references "Puerto Riso" then please return "PR".
+If there is no state included in the text, please return an empty list.
+
+Here are three examples
+##
+Example 1: Distributed in OR and WA
+Please return: [OR, WA]
+##
+
+##
+Example 2: Distribution centers located throughout the U.S. and further distributed to sensitive populations
+Please return: [USA]
+##
+
+##
+Example 3: Distribution includes 26 domestic retail consignees across the following states: Connecticut, New York, New Jersey, and Florida, and Wisconsin
+Please return: [CT, NY, NJ, FL, WI]
+##
+
+##
+Example 4: Product is distributed throughout the USA via the firm's website.
+Please return: [USA]
+##
+
+Please extract the two letter state codes from this text.
+Return ONLY a list of state codes with NO additional information. Do NOT include any additional text explaining the process.
+\
+"""
+
+def llm_get_location(prompt):
+    raw_location = _invoke_bedrock(_LOCATION_SYSTEM, prompt, max_tokens=512)
+    parsed = _parse_json_response(raw_location)
+
+    if isinstance(parsed, str):
+        return parsed
+    else:
+        return ''
