@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    open: true,
     proxy: {
       // Use '/api/' so /api.ts (module) is not proxied; only /api/search, /api/health, etc. are
       '/api/': {

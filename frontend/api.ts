@@ -1,110 +1,122 @@
 /**
  * API layer: all HTTP calls to the FastAPI backend.
- * - searchProduct / checkRecallByUPC: product lookup (backend then Open Food Facts fallback).
- * - Cart: getUserCart, addToCart, removeFromCart.
- * - getFdaRecalls: optional FDA recall endpoint (see backend/fda_recalls.py).
+ * Primary scan uses GET /api/risk/scan/{upc} from the ingredient_diet_workflow branch.
  */
 import axios from 'axios';
-import type { Product, SearchRequest, SearchResponse, UserCart, CartItem, RecallInfo } from './types';
+import type {
+  Product, SearchRequest, SearchResponse, UserCart, CartItem,
+  RecallInfo, ScanResponse, AuthUser, ReceiptScanResult,
+} from './types';
 
-// In dev: falls back to localhost:8000. In production: VITE_API_URL='' (empty)
-// so all /api/* calls are relative and nginx proxies them to FastAPI.
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  headers: { 'Content-Type': 'application/json' },
 });
 
-/** Map backend recall payload to app RecallInfo (e.g. hazard class string → Class I/II/III). */
+function mapToHazardClass(raw: Record<string, unknown>): 'Class I' | 'Class II' | 'Class III' {
+  const v = (raw.hazard_classification ?? raw.hazard_class ?? raw.classification ?? '') as string;
+  const lower = String(v).toLowerCase();
+  if (lower.includes('iii')) return 'Class III';
+  if (lower.includes('ii')) return 'Class II';
+  if (lower.includes('i')) return 'Class I';
+  return 'Class II';
+}
+
 function mapRecallInfo(raw: Record<string, unknown> | null | undefined): RecallInfo | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const classification = mapToHazardClass(raw);
   return {
+    id: raw.id as number | undefined,
     upc: String(raw.upc ?? ''),
     product_name: String(raw.product_name ?? ''),
     brand_name: String(raw.brand_name ?? ''),
     recall_date: String(raw.recall_date ?? ''),
     reason: String(raw.reason ?? ''),
-    hazard_classification: classification,
+    hazard_classification: mapToHazardClass(raw),
+    source: raw.source as string | undefined,
     firm_name: String(raw.firm_name ?? ''),
     distribution: String(raw.distribution ?? ''),
+    match_method: raw.match_method as string | undefined,
+    match_confidence: raw.match_confidence as number | undefined,
+    summary: raw.summary as RecallInfo['summary'],
   };
 }
 
-function mapToHazardClass(raw: Record<string, unknown>): 'Class I' | 'Class II' | 'Class III' {
-  const v = (raw.hazard_classification ?? raw.hazard_class ?? raw.classification ?? raw.class ?? '') as string;
-  const lower = String(v).toLowerCase();
-  if (lower.includes('i') && !lower.includes('ii') && !lower.includes('iii')) return 'Class I';
-  if (lower.includes('iii')) return 'Class III';
-  if (lower.includes('ii')) return 'Class II';
-  return 'Class II';
-}
-
 /**
- * Check recall by UPC: try FastAPI backend first; if product not in DB, fall back to Open Food Facts.
+ * Primary scan endpoint. Calls GET /api/risk/scan/{upc}.
+ * Returns full risk analysis including verdict, notifications, allergen matches, diet flags.
  */
-export async function checkRecallByUPC(upc: string): Promise<Product> {
-  try {
-    const res = await fetch(`${API_BASE}/api/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ upc }),
-    });
+export async function riskScan(upc: string, userId?: string | number, enableAi = false): Promise<ScanResponse> {
+  const params = new URLSearchParams();
+  if (userId != null) params.set('user_id', String(userId));
+  if (enableAi) params.set('enable_ai', 'true');
 
-    if (!res.ok) {
-      return checkOpenFoodFacts(upc);
-    }
-
-    const data = (await res.json()) as Record<string, unknown>;
-    const recallInfo = data.recall_info != null ? mapRecallInfo(data.recall_info as Record<string, unknown>) : undefined;
-    return {
-      upc: String(data.upc ?? upc),
-      product_name: String(data.product_name ?? 'Unknown'),
-      brand_name: String(data.brand_name ?? ''),
-      category: data.category as string | undefined,
-      ingredients: Array.isArray(data.ingredients) ? (data.ingredients as string[]) : undefined,
-      is_recalled: Boolean(data.is_recalled),
-      recall_info: recallInfo,
-    };
-  } catch {
-    return checkOpenFoodFacts(upc);
+  const url = `${API_BASE}/api/risk/scan/${encodeURIComponent(upc)}${params.toString() ? '?' + params.toString() : ''}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Scan failed (${res.status})`);
   }
+  return res.json() as Promise<ScanResponse>;
 }
 
-/**
- * Fallback when UPC is not in local DB: fetch from Open Food Facts (no recall cross-check here).
- */
-export async function checkOpenFoodFacts(upc: string): Promise<Product> {
-  const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${upc}.json`);
-  const data = await res.json();
-
-  if (data.status === 0 || !data.product) {
+/** Convert ScanResponse to a Product for backward compat with components that use Product. */
+export function scanResponseToProduct(scan: ScanResponse): Product {
+  if (!scan.found || !scan.product) {
     return {
-      upc,
-      product_name: `Product ${upc}`,
-      brand_name: 'Unknown',
+      upc: scan.upc ?? '',
+      product_name: 'Product not found',
+      brand_name: '',
       is_recalled: false,
     };
   }
+  return {
+    upc: scan.product.upc,
+    product_name: scan.product.product_name,
+    brand_name: scan.product.brand_name,
+    category: scan.product.category,
+    ingredients: scan.product.ingredients,
+    image_url: scan.product.image_url,
+    is_recalled: scan.risk?.is_recalled ?? scan.recall != null,
+    recall_info: scan.recall ? mapRecallInfo(scan.recall as unknown as Record<string, unknown>) : undefined,
+    verdict: scan.verdict ?? undefined,
+    notifications: scan.notifications,
+    risk: scan.risk ?? undefined,
+  };
+}
 
-  const product = data.product as Record<string, unknown>;
-  const ingredientsTags = product.ingredients_tags as string[] | undefined;
-  const ingredients = Array.isArray(ingredientsTags)
-    ? ingredientsTags.map((t: string) => t.replace(/^[a-z]{2}:/, ''))
-    : undefined;
-
+/** Fallback: Open Food Facts lookup. */
+export async function checkOpenFoodFacts(upc: string): Promise<Product> {
+  const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${upc}.json`);
+  const data = await res.json();
+  if (data.status === 0 || !data.product) {
+    return { upc, product_name: `Product ${upc}`, brand_name: 'Unknown', is_recalled: false };
+  }
+  const p = data.product as Record<string, unknown>;
+  const tags = p.ingredients_tags as string[] | undefined;
+  const ingredients = Array.isArray(tags) ? tags.map((t: string) => t.replace(/^[a-z]{2}:/, '')) : undefined;
   return {
     upc,
-    product_name: (product.product_name as string) || 'Unknown Product',
-    brand_name: (product.brands as string) || 'Unknown Brand',
-    category: product.categories as string | undefined,
+    product_name: (p.product_name as string) || 'Unknown Product',
+    brand_name: (p.brands as string) || 'Unknown Brand',
+    category: p.categories as string | undefined,
     ingredients,
-    image_url: (product.image_front_small_url as string) || (product.image_url as string) || undefined,
+    image_url: (p.image_front_small_url as string) || (p.image_url as string) || undefined,
     is_recalled: false,
   };
+}
+
+/**
+ * Combined lookup: tries risk scan, falls back to Open Food Facts.
+ */
+export async function lookupByUPC(upc: string, userId?: string | number): Promise<{ product: Product; scan: ScanResponse | null }> {
+  try {
+    const scan = await riskScan(upc, userId, true);
+    return { product: scanResponseToProduct(scan), scan };
+  } catch {
+    const product = await checkOpenFoodFacts(upc);
+    return { product, scan: null };
+  }
 }
 
 export const healthCheck = async () => {
@@ -112,17 +124,13 @@ export const healthCheck = async () => {
   return data;
 };
 
-export const searchProduct = async (request: SearchRequest): Promise<Product | Product[]> => {
-  // UPC-only search: use backend + Open Food Facts fallback
-  if (request.upc != null && request.upc !== '' && request.name == null) {
-    return checkRecallByUPC(request.upc);
+export const searchProduct = async (request: SearchRequest, userId?: string | number): Promise<Product | Product[]> => {
+  if (request.upc && !request.name) {
+    const { product } = await lookupByUPC(request.upc, userId);
+    return product;
   }
-
-  const { data } = await api.post<SearchResponse>('/api/search', request);
-
-  // Handle single product response
+  const { data } = await api.post<SearchResponse>('/api/search', { ...request, user_id: userId ? Number(userId) : undefined });
   if (data.upc && data.product_name) {
-    const recallInfo = data.recall_info != null ? mapRecallInfo(data.recall_info as unknown as Record<string, unknown>) : data.recall_info;
     return {
       upc: data.upc,
       product_name: data.product_name,
@@ -130,29 +138,17 @@ export const searchProduct = async (request: SearchRequest): Promise<Product | P
       category: data.category,
       ingredients: data.ingredients,
       is_recalled: data.is_recalled ?? false,
-      recall_info: recallInfo,
+      recall_info: data.recall_info ? mapRecallInfo(data.recall_info as unknown as Record<string, unknown>) : undefined,
+      verdict: data.verdict,
+      risk: data.risk ?? undefined,
     };
   }
-
-  // Handle multiple products response
-  if (data.results) {
-    return data.results;
-  }
-
+  if (data.results) return data.results;
   throw new Error('Invalid response format');
 };
 
 export const getAllRecalls = async () => {
   const { data } = await api.get('/api/recalls');
-  return data;
-};
-
-/**
- * Query FDA recalls via your backend (server-side call to openFDA).
- * Use once you add GET /api/recalls/fda to app.py (see backend/fda_recalls.py).
- */
-export const getFdaRecalls = async (params: { upc?: string; product_name?: string }) => {
-  const { data } = await api.get<{ results?: unknown[] }>('/api/recalls/fda', { params });
   return data;
 };
 
@@ -171,121 +167,70 @@ export const removeFromCart = async (userId: string, upc: string) => {
   return data;
 };
 
-/**
- * Barcode scan lookup: fetches Open Food Facts (rich product data + image) and
- * our recall DB in parallel, then merges them. This way every scan gets the best
- * available product info AND an accurate recall check even for products not in our DB.
- */
-export async function lookupByUPC(upc: string): Promise<Product> {
-  const [offResult, recallResult] = await Promise.allSettled([
-    checkOpenFoodFacts(upc),
-    fetch(`${API_BASE}/api/recalls/check/${upc}`).then((r) => r.json() as Promise<{ is_recalled: boolean; recall_info: RecallInfo | null }>),
-  ]);
-
-  const offProduct = offResult.status === 'fulfilled' ? offResult.value : null;
-  const recallData = recallResult.status === 'fulfilled' ? recallResult.value : null;
-
-  // If Open Food Facts found nothing useful, fall back to our DB for product name/brand
-  const nameFromOFF = offProduct?.product_name;
-  const isUnknown   = !nameFromOFF || nameFromOFF === `Product ${upc}` || nameFromOFF === 'Unknown Product';
-
-  let productName = nameFromOFF ?? `Product ${upc}`;
-  let brandName   = offProduct?.brand_name ?? '';
-  let category    = offProduct?.category;
-  let ingredients = offProduct?.ingredients;
-  let imageUrl    = offProduct?.image_url;
-
-  if (isUnknown) {
-    // Try our DB as a fallback for product metadata
-    try {
-      const res = await fetch(`${API_BASE}/api/search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ upc }),
-      });
-      if (res.ok) {
-        const db = (await res.json()) as Record<string, unknown>;
-        productName = String(db.product_name ?? productName);
-        brandName   = String(db.brand_name   ?? brandName);
-        category    = (db.category as string) ?? category;
-        ingredients = Array.isArray(db.ingredients) ? (db.ingredients as string[]) : ingredients;
-      }
-    } catch { /* ignore — we'll show what we have */ }
-  }
-
-  return {
-    upc,
-    product_name: productName,
-    brand_name:   brandName,
-    category,
-    ingredients,
-    image_url:    imageUrl,
-    is_recalled:  recallData?.is_recalled  ?? false,
-    recall_info:  recallData?.recall_info  ?? undefined,
-  };
-}
-
-// ── Receipt scanning ──────────────────────────────────────────────────────────
-
-export interface ReceiptMatchedProduct {
-  raw_text: string;
-  cleaned_text: string;
-  upc: string;
-  product_name: string;
-  brand_name: string;
-  ingredients: string[];
-}
-
-export interface ReceiptScanResult {
-  matched: ReceiptMatchedProduct[];
-  unmatched: string[];
-  total_lines: number;
-}
-
-/**
- * Upload a receipt image for OCR + product matching.
- * Returns matched products (UPC, name, brand, ingredients) and unmatched lines.
- */
 export async function scanReceipt(file: File): Promise<ReceiptScanResult> {
   const formData = new FormData();
   formData.append('file', file);
-
-  const res = await fetch(`${API_BASE}/api/receipt/scan`, {
-    method: 'POST',
-    body: formData,
-    // No Content-Type header — browser sets multipart boundary automatically
-  });
-
+  const res = await fetch(`${API_BASE}/api/receipt/scan`, { method: 'POST', body: formData });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
     throw new Error((err as { detail?: string }).detail ?? 'Receipt scan failed');
   }
-
   return res.json() as Promise<ReceiptScanResult>;
 }
 
-export interface AuthUser {
-  id: number;
-  name: string;
-  email: string;
-  created_at: string;
-}
-
-export const registerUser = async (name: string, email: string, password: string): Promise<AuthUser> => {
+/** Register with allergens and diet preferences. */
+export const registerUser = async (
+  name: string, email: string, password: string,
+  allergens: string[] = [], dietPreferences: string[] = [], state?: string
+): Promise<AuthUser> => {
   const { data } = await api.post<{ message: string; user: AuthUser }>('/api/users/register', {
-    name,
-    email,
-    password,
+    name, email, password, state, allergens, diet_preferences: dietPreferences,
   });
   return data.user;
 };
 
 export const loginUser = async (email: string, password: string): Promise<AuthUser> => {
-  const { data } = await api.post<{ message: string; user: AuthUser }>('/api/users/login', {
-    email,
-    password,
-  });
+  const { data } = await api.post<{ message: string; user: AuthUser }>('/api/users/login', { email, password });
   return data.user;
+};
+
+/** Fetch the user's allergen/diet profile. */
+export const getUserProfile = async (userId: number | string): Promise<AuthUser> => {
+  const { data } = await api.get<AuthUser>(`/api/users/${userId}/profile`);
+  return data;
+};
+
+/** Update allergens, diets, or state. */
+export const updateUserProfile = async (
+  userId: number | string,
+  updates: { allergens?: string[]; diet_preferences?: string[]; state?: string }
+): Promise<AuthUser> => {
+  const { data } = await api.patch<AuthUser>(`/api/users/${userId}/profile`, updates);
+  return data;
+};
+
+/** Get recall alerts for a user. */
+export const getUserAlerts = async (userId: string | number) => {
+  const { data } = await api.get<{
+    user_id: string;
+    alerts: Array<{
+      alert_id: number;
+      product_upc: string;
+      product_name: string;
+      viewed: boolean;
+      created_at: string;
+      recall: RecallInfo;
+    }>;
+    count: number;
+    unviewed_count: number;
+  }>(`/api/alerts/${userId}`);
+  return data;
+};
+
+/** Mark an alert as viewed. */
+export const markAlertViewed = async (alertId: number) => {
+  const { data } = await api.patch(`/api/alerts/${alertId}/viewed`);
+  return data;
 };
 
 export default api;

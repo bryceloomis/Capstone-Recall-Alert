@@ -36,7 +36,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import APIRouter
 
 from database import execute_query
+
+# Lazy import — LLM_services requires boto3 + Bedrock IAM; gracefully optional
+try:
+    from LLM_services import explain_recall as _explain_recall
+except Exception:
+    _explain_recall = None
 from user_alerts import generate_alerts_for_new_recalls
+
 
 log = logging.getLogger(__name__)
 
@@ -191,6 +198,55 @@ def upsert_recall(record: dict) -> bool:
         return False
 
 
+# ── LLM recall explainer ───────────────────────────────────────────────────
+
+def _generate_recall_summary(recall_record: dict) -> None:
+    """
+    Generate a plain-language recall explanation and store it in the DB.
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │  INTEGRATION POINT: llm_service.py → explain_recall()          │
+    │                                                                │
+    │  Called from: run_recall_refresh() after each new INSERT.      │
+    │  Writes to:  recalls.plain_language_summary (JSONB column)     │
+    │  Read by:    risk_routes.py → _load_recall_summary()           │
+    │                                                                │
+    │  Failure mode: logs a warning and moves on. The raw FDA        │
+    │  reason text is always available as fallback.                   │
+    └────────────────────────────────────────────────────────────────┘
+    """
+    if _explain_recall is None:
+        return  # Bedrock not configured — skip silently
+
+    try:
+        import json
+
+        explanation = _explain_recall(
+            product_name=recall_record.get("product_name", ""),
+            reason=recall_record.get("reason", ""),
+            severity=recall_record.get("severity", ""),
+            firm_name=recall_record.get("firm_name", ""),
+            distribution=recall_record.get("distribution_pattern", ""),
+        )
+        if explanation:
+            execute_query(
+                """UPDATE recalls
+                   SET plain_language_summary = %s
+                   WHERE upc = %s AND recall_date = %s;""",
+                (
+                    json.dumps(explanation.to_dict()),
+                    recall_record["upc"],
+                    recall_record["recall_date"],
+                ),
+            )
+            log.info("Generated recall summary for upc=%s", recall_record["upc"])
+    except ImportError:
+        log.debug("llm_service not available — skipping recall summary.")
+    except Exception as exc:
+        log.warning("Failed to generate recall summary for upc=%s: %s",
+                    recall_record.get("upc"), exc)
+
+
 # ── Main refresh pipeline ─────────────────────────────────────────────────────
 
 def run_recall_refresh() -> dict:
@@ -223,6 +279,12 @@ def run_recall_refresh() -> dict:
         was_inserted = upsert_recall(mapped)
         if was_inserted:
             inserted += 1
+            # ── Generate plain-language summary via LLM ───────────────
+            #    Called once per NEW recall only (not updates).
+            #    Result stored in recalls.plain_language_summary JSONB.
+            #    If Bedrock is unavailable, the raw FDA text is still there.
+            #    See llm_service.py → explain_recall() for full docs.
+            _generate_recall_summary(mapped)
         else:
             skipped += 1
 
