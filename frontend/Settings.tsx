@@ -19,6 +19,8 @@ export const Settings = () => {
   const setDietPreferences = useStore((s) => s.setDietPreferences);
 
   const isSignedIn = userProfile != null && (userProfile.name != null || userProfile.email != null);
+  // userProfile.id may be missing in old sessions; userId in store is the string fallback
+  const resolvedId = userProfile?.id ?? (userId && userId !== 'test_user' ? parseInt(userId) : undefined);
 
   const [localAllergens, setLocalAllergens] = useState<string[]>(allergens);
   const [localDiets, setLocalDiets] = useState<string[]>(dietPreferences);
@@ -34,10 +36,14 @@ export const Settings = () => {
   });
 
   useEffect(() => {
-    if (!isSignedIn || !userProfile?.id) return;
+    if (!isSignedIn || !resolvedId) return;
     setLoadingProfile(true);
-    getUserProfile(userProfile.id)
+    getUserProfile(resolvedId)
       .then((p) => {
+        // Patch userProfile in store if id was missing
+        if (!userProfile?.id && p.id) {
+          setUserProfile({ ...userProfile, id: p.id });
+        }
         if (p.allergens) {
           const known = COMMON_ALLERGENS as readonly string[];
           const standard = p.allergens.filter((a: string) => known.includes(a));
@@ -51,7 +57,7 @@ export const Settings = () => {
       })
       .catch(() => {})
       .finally(() => setLoadingProfile(false));
-  }, [userProfile?.id]);
+  }, [resolvedId]);
 
   const toggleChip = (list: string[], item: string, setter: (v: string[]) => void) => {
     setter(list.includes(item) ? list.filter(x => x !== item) : [...list, item]);
@@ -77,10 +83,10 @@ export const Settings = () => {
   const allAllergens = [...localAllergens, ...customIngredients];
 
   const handleSaveProfile = async () => {
-    if (!userProfile?.id) return;
+    if (!resolvedId) return;
     setSaving(true);
     try {
-      await updateUserProfile(userProfile.id, {
+      await updateUserProfile(resolvedId, {
         allergens: allAllergens,
         diet_preferences: localDiets,
         state: localState || undefined,
