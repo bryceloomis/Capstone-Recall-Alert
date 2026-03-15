@@ -1,12 +1,14 @@
 """
-user_routes.py – FastAPI APIRouter for user auth and grocery cart.
+user_routes.py – FastAPI APIRouter for user auth, profile, and grocery cart.
 
 Endpoints:
-  POST   /api/users/register                   – create account
-  POST   /api/users/login                      – sign in
-  GET    /api/user/cart/{user_id}              – fetch user's grocery list
-  POST   /api/user/cart                        – add item to list (barcode scan)
-  DELETE /api/user/cart/{user_id}/{upc}        – remove a barcode item by UPC
+  POST   /api/users/register                     – create account (with allergens + diets)
+  POST   /api/users/login                        – sign in (returns profile incl. allergens)
+  GET    /api/users/{user_id}/profile            – fetch current allergen & diet profile
+  PATCH  /api/users/{user_id}/profile            – update allergens, diets, state
+  GET    /api/user/cart/{user_id}                – fetch user's grocery list
+  POST   /api/user/cart                          – add item to list (barcode or receipt)
+  DELETE /api/user/cart/{user_id}/{upc}          – remove a barcode item by UPC
   DELETE /api/user/cart/{user_id}/receipt/{name} – remove a receipt item by name
 """
 
@@ -23,9 +25,12 @@ router = APIRouter()
 # ── Data Models ────────────────────────────────────────────────────────────────
 
 class UserRegister(BaseModel):
-    name:     str
-    email:    str
-    password: str
+    name:             str
+    email:            str
+    password:         str
+    state:            Optional[str]       = None   # e.g. "CA"
+    allergens:        Optional[list[str]] = []     # e.g. ["Peanuts", "Soy"]
+    diet_preferences: Optional[list[str]] = []    # e.g. ["Vegan", "Gluten-Free"]
 
 
 class UserLogin(BaseModel):
@@ -42,6 +47,13 @@ class UserCartItem(BaseModel):
     source:       str = "barcode"        # 'barcode' | 'receipt'
 
 
+class ProfileUpdate(BaseModel):
+    """Payload for updating a user's allergen and diet profile."""
+    allergens:        Optional[list[str]] = None
+    diet_preferences: Optional[list[str]] = None
+    state:            Optional[str]       = None
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _parse_user_id(user_id: str) -> Optional[int]:
@@ -56,37 +68,56 @@ def _parse_user_id(user_id: str) -> Optional[int]:
 
 @router.post("/api/users/register")
 async def register_user(user: UserRegister):
-    """Create a new user account with a bcrypt-hashed password."""
+    """
+    Create a new user account with a bcrypt-hashed password.
+    Persists allergens and diet_preferences so the risk engine
+    can personalise results from the first scan onward.
+    """
     existing = execute_query("SELECT id FROM users WHERE email = %s;", (user.email,))
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
     password_hash = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
+
     result = execute_query(
         """
-        INSERT INTO users (name, email, password_hash)
-        VALUES (%s, %s, %s)
-        RETURNING id, name, email, created_at;
+        INSERT INTO users (name, email, password_hash, state, allergens, diet_preferences)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id, name, email, state, allergens, diet_preferences, created_at;
         """,
-        (user.name, user.email, password_hash),
+        (
+            user.name,
+            user.email,
+            password_hash,
+            user.state,
+            user.allergens or [],
+            user.diet_preferences or [],
+        ),
     )
     new_user = result[0]
     return {
         "message": "Account created successfully.",
         "user": {
-            "id":         new_user["id"],
-            "name":       new_user["name"],
-            "email":      new_user["email"],
-            "created_at": str(new_user["created_at"]),
+            "id":               new_user["id"],
+            "name":             new_user["name"],
+            "email":            new_user["email"],
+            "state":            new_user.get("state"),
+            "allergens":        new_user.get("allergens") or [],
+            "diet_preferences": new_user.get("diet_preferences") or [],
+            "created_at":       str(new_user["created_at"]),
         },
     }
 
 
 @router.post("/api/users/login")
 async def login_user(credentials: UserLogin):
-    """Verify email + password and return the user record."""
+    """Verify email + password and return the user record including profile."""
     result = execute_query(
-        "SELECT id, name, email, password_hash, created_at FROM users WHERE email = %s;",
+        """
+        SELECT id, name, email, password_hash, state,
+               allergens, diet_preferences, created_at
+        FROM users WHERE email = %s;
+        """,
         (credentials.email,),
     )
     if not result:
@@ -99,10 +130,87 @@ async def login_user(credentials: UserLogin):
     return {
         "message": "Login successful.",
         "user": {
-            "id":         user["id"],
-            "name":       user["name"],
-            "email":      user["email"],
-            "created_at": str(user["created_at"]),
+            "id":               user["id"],
+            "name":             user["name"],
+            "email":            user["email"],
+            "state":            user.get("state"),
+            "allergens":        user.get("allergens") or [],
+            "diet_preferences": user.get("diet_preferences") or [],
+            "created_at":       str(user["created_at"]),
+        },
+    }
+
+
+# ── Profile ────────────────────────────────────────────────────────────────────
+
+@router.get("/api/users/{user_id}/profile")
+async def get_user_profile(user_id: int):
+    """Return the user's current allergen and diet profile."""
+    rows = execute_query(
+        """
+        SELECT id, name, email, state, allergens, diet_preferences
+        FROM users WHERE id = %s LIMIT 1;
+        """,
+        (user_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found.")
+    u = rows[0]
+    return {
+        "user_id":          u["id"],
+        "name":             u["name"],
+        "email":            u["email"],
+        "state":            u.get("state"),
+        "allergens":        u.get("allergens") or [],
+        "diet_preferences": u.get("diet_preferences") or [],
+    }
+
+
+@router.patch("/api/users/{user_id}/profile")
+async def update_user_profile(user_id: int, update: ProfileUpdate):
+    """
+    Update allergens, diet_preferences, and/or state for a user.
+    Only supplied fields are changed; omitted (None) fields are left as-is.
+    """
+    existing = execute_query("SELECT id FROM users WHERE id = %s LIMIT 1;", (user_id,))
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    set_clauses: list[str] = []
+    params: list = []
+
+    if update.allergens is not None:
+        set_clauses.append("allergens = %s")
+        params.append(update.allergens)
+
+    if update.diet_preferences is not None:
+        set_clauses.append("diet_preferences = %s")
+        params.append(update.diet_preferences)
+
+    if update.state is not None:
+        set_clauses.append("state = %s")
+        params.append(update.state)
+
+    if not set_clauses:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    params.append(user_id)
+    query = f"""
+        UPDATE users SET {', '.join(set_clauses)}
+        WHERE id = %s
+        RETURNING id, name, email, state, allergens, diet_preferences;
+    """
+    result = execute_query(query, tuple(params))
+    u = result[0]
+    return {
+        "message": "Profile updated.",
+        "user": {
+            "user_id":          u["id"],
+            "name":             u["name"],
+            "email":            u["email"],
+            "state":            u.get("state"),
+            "allergens":        u.get("allergens") or [],
+            "diet_preferences": u.get("diet_preferences") or [],
         },
     }
 
@@ -148,7 +256,7 @@ async def add_to_cart(item: UserCartItem):
 
     Receipt items (upc omitted / None):
       Deduplicated by (user_id, product_name) via partial unique index.
-      source will be set to 'receipt'.
+      source is set to 'receipt'.
     """
     uid = _parse_user_id(item.user_id)
     if uid is None:

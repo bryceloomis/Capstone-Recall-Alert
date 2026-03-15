@@ -29,11 +29,12 @@ from user_routes    import router as user_router
 from user_alerts    import router as alerts_router
 from receipt_scan   import router as receipt_router
 from recall_update  import router as recall_router, start_recall_scheduler
+from risk_routes    import router as risk_router
 
 
 # ── App setup ──────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Food Recall Alert API", version="0.2.0")
+app = FastAPI(title="Food Recall Alert API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +50,7 @@ app.include_router(user_router)
 app.include_router(alerts_router)
 app.include_router(receipt_router)
 app.include_router(recall_router)
+app.include_router(risk_router)
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────
@@ -65,28 +67,35 @@ def on_startup():
 async def root():
     return {
         "message": "Food Recall Alert API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "modules": {
-            "barcode_routes.py":  "Product search, manual submit, recall check",
-            "user_routes.py":     "Auth (register/login) + cart CRUD",
-            "user_alerts.py":     "Alert endpoints + generation + email stub",
-            "receipt_scan.py":    "Receipt OCR + product matching",
-            "recall_update.py":   "FDA recall refresh + APScheduler",
+            "barcode_routes.py":        "Product search, manual submit, recall listing",
+            "user_routes.py":           "Auth (register/login), allergen & diet profile, cart",
+            "user_alerts.py":           "Alert endpoints + generation + email stub",
+            "receipt_scan.py":          "Receipt OCR + cart save + immediate recall check",
+            "recall_update.py":         "FDA recall refresh + APScheduler + LLM summaries",
+            "risk_routes.py":           "Barcode scan: full risk analysis + LLM disambiguation",
+            "ingredient_risk_engine.py":"Deterministic allergen + diet + recall risk scoring",
+            "LLM_services.py":          "AWS Bedrock: ingredient disambiguator + recall explainer",
         },
         "endpoints": {
-            "/api/health":                  "Health check (live DB counts)",
-            "/api/search":                  "POST – search by UPC or name",
-            "/api/products":                "POST – manually submit a product",
-            "/api/recalls":                 "GET  – all recalls (newest first)",
-            "/api/recalls/check/{upc}":     "GET  – recall status for one UPC",
-            "/api/user/cart/{user_id}":     "GET  – user's saved grocery list",
-            "/api/user/cart":               "POST – add item to grocery list",
-            "/api/receipt/scan":            "POST – receipt photo OCR + matching",
-            "/api/admin/refresh-recalls":   "POST – manual recall refresh",
-            "/api/users/register":          "POST – create account",
-            "/api/users/login":             "POST – sign in",
-            "/api/alerts/{user_id}":        "GET  – user's recall alerts",
-            "/api/alerts/{alert_id}/viewed":"PATCH – mark alert as viewed",
+            "/api/health":                          "GET   – health check (live DB counts)",
+            "/api/risk/scan/{upc}":                 "GET   – barcode scan → verdict + explanation (primary)",
+            "/api/users/register":                  "POST  – create account (with allergens & diets)",
+            "/api/users/login":                     "POST  – sign in (returns full profile)",
+            "/api/users/{user_id}/profile":         "GET/PATCH – allergen & diet profile",
+            "/api/search":                          "POST  – search by UPC or name",
+            "/api/products":                        "POST  – manually submit a product",
+            "/api/recalls":                         "GET   – all recalls (newest first)",
+            "/api/recalls/check/{upc}":             "GET   – recall status for one UPC",
+            "/api/user/cart/{user_id}":             "GET   – user's saved grocery list",
+            "/api/user/cart":                       "POST  – add item to grocery list",
+            "/api/user/cart/{user_id}/{upc}":       "DELETE – remove barcode item by UPC",
+            "/api/user/cart/{user_id}/receipt/{n}": "DELETE – remove receipt item by name",
+            "/api/receipt/scan":                    "POST  – receipt photo OCR + cart save + recall check",
+            "/api/admin/refresh-recalls":           "POST  – manual recall refresh",
+            "/api/alerts/{user_id}":                "GET   – user's recall alerts",
+            "/api/alerts/{alert_id}/viewed":        "PATCH – mark alert as viewed",
         },
     }
 
@@ -112,7 +121,7 @@ async def db_test():
     if not test_connection():
         raise HTTPException(status_code=503, detail="Cannot connect to database.")
 
-    tables  = ["users", "products", "recalls", "user_carts", "alerts"]
+    tables  = ["users", "products", "recalls", "user_carts", "alerts", "disambiguation_cache"]
     summary = {}
     for table in tables:
         try:
