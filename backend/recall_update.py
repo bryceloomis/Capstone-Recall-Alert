@@ -151,7 +151,6 @@ def map_fda_to_db(record: dict) -> Optional[dict]:
         "recall_date":         recall_date,
         "reason":              (record.get("reason_for_recall") or "")[:1000],
         "severity":            (record.get("classification") or "")[:50],
-        "firm_name":           (record.get("recalling_firm") or "")[:200],
         "distribution_pattern":(record.get("distribution_pattern") or "")[:500],
         "source":              "FDA",
     }
@@ -173,10 +172,10 @@ def upsert_recall(record: dict) -> bool:
             """
             INSERT INTO recalls
               (upc, product_name, brand_name, recall_date, reason,
-               severity, firm_name, distribution_pattern, source)
+               severity, distribution_pattern, source)
             VALUES
               (%(upc)s, %(product_name)s, %(brand_name)s, %(recall_date)s,
-               %(reason)s, %(severity)s, %(firm_name)s, %(distribution_pattern)s,
+               %(reason)s, %(severity)s, %(distribution_pattern)s,
                %(source)s)
             ON CONFLICT (upc, recall_date)
             DO UPDATE SET
@@ -184,7 +183,6 @@ def upsert_recall(record: dict) -> bool:
               brand_name          = EXCLUDED.brand_name,
               reason              = EXCLUDED.reason,
               severity            = EXCLUDED.severity,
-              firm_name           = EXCLUDED.firm_name,
               distribution_pattern = EXCLUDED.distribution_pattern,
               source              = EXCLUDED.source
             RETURNING (xmax = 0) AS inserted;
@@ -225,7 +223,6 @@ def _generate_recall_summary(recall_record: dict) -> None:
             product_name=recall_record.get("product_name", ""),
             reason=recall_record.get("reason", ""),
             severity=recall_record.get("severity", ""),
-            firm_name=recall_record.get("firm_name", ""),
             distribution=recall_record.get("distribution_pattern", ""),
         )
         if explanation:

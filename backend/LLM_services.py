@@ -493,7 +493,6 @@ def explain_recall(
     product_name: str,
     reason: str,
     severity: str,
-    firm_name: str = "",
     distribution: str = "",
 ) -> Optional[RecallExplanation]:
     """
@@ -512,7 +511,6 @@ def explain_recall(
 
     prompt = (
         f"Product: {product_name}\n"
-        f"Recalling firm: {firm_name}\n"
         f"FDA reason: {reason}\n"
         f"Classification: {severity}\n"
         f"Distribution: {distribution}\n\n"

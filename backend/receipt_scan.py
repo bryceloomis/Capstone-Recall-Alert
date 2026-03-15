@@ -184,7 +184,7 @@ def _load_recall_candidates() -> list[RecallCandidate]:
             recall_date,
             reason,
             severity,
-            firm_name,
+
             source
         FROM recalls
         ORDER BY recall_date DESC;
@@ -202,7 +202,6 @@ def _load_recall_candidates() -> list[RecallCandidate]:
                 recall_date=str(r.get("recall_date") or ""),
                 reason=r.get("reason") or "",
                 severity=r.get("severity") or "",
-                firm_name=r.get("firm_name") or "",
                 source=r.get("source") or "FDA",
             )
         )
@@ -237,7 +236,7 @@ async def scan_receipt(
           "brand_name": ...,
           "is_recalled": true,
           "recall_info": { "id", "reason", "recall_date", "severity",
-                           "firm_name", "source" },
+                           "source" },
           "match_score": 0.83,
           "matcher": "tfidf_hybrid"
         },
@@ -381,7 +380,6 @@ async def scan_receipt(
                     "reason":      c.reason,
                     "recall_date": c.recall_date,
                     "severity":    c.severity,
-                    "firm_name":   c.firm_name,
                     "source":      c.source,
                 },
                 "match_score": round(match.score, 4),

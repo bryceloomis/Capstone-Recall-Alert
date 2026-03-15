@@ -90,7 +90,6 @@ def build_rows(csv_path: Path) -> list[tuple]:
 
             product_name = (line.get("product_description") or "").strip()[:255]
             reason       = (line.get("product_reason") or "").strip()
-            firm_name    = (line.get("recalling_firm") or "").strip()[:200]
             dist_pattern = (line.get("distribution_pattern") or "").strip()[:500]
             sev_raw      = (line.get("classification_type") or "").strip().lower()
             severity     = SEVERITY_MAP.get(sev_raw)
@@ -111,7 +110,6 @@ def build_rows(csv_path: Path) -> list[tuple]:
                     reason,
                     "FDA",        # source
                     severity,
-                    firm_name or None,
                     dist_pattern or None,
                 ))
     return rows
@@ -130,7 +128,7 @@ def main():
                     """
                     INSERT INTO recalls
                         (upc, product_name, brand_name, recall_date, reason,
-                         source, severity, firm_name, distribution_pattern)
+                         source, severity, distribution_pattern)
                     VALUES %s
                     ON CONFLICT (upc, recall_date) DO NOTHING
                     """,
