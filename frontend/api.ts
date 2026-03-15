@@ -5,8 +5,10 @@
 import axios from 'axios';
 import type {
   Product, SearchRequest, SearchResponse, UserCart, CartItem,
-  RecallInfo, ScanResponse, AuthUser, ReceiptScanResult,
+  RecallInfo, ScanResponse, AuthUser, ReceiptScanResult, ReceiptMatchedProduct,
 } from './types';
+
+export type { ReceiptScanResult, ReceiptMatchedProduct };
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
