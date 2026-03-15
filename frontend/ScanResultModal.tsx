@@ -265,19 +265,21 @@ export const ScanResultModal = ({
 
       {/* Footer */}
       <div className="shrink-0 px-5 py-4 border-t border-black/10 space-y-3 bg-white">
-        {verdict === 'OK' && (
-          isSignedIn ? (
-            <button onClick={() => onAddToCart(product)} disabled={isAdding}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-black text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50">
-              <ShoppingCart className="w-4 h-4" />
-              {isAdding ? 'Adding…' : 'Add to My Groceries'}
-            </button>
-          ) : (
-            <p className="text-center text-sm text-[#888]">
-              <button onClick={onClose} className="text-black font-medium underline underline-offset-2">Sign in</button>
-              {' '}to save this to your grocery list
-            </p>
-          )
+        {isSignedIn ? (
+          <button onClick={() => onAddToCart(product)} disabled={isAdding}
+            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-opacity disabled:opacity-50 ${
+              verdict === 'OK'
+                ? 'bg-black text-white hover:opacity-90'
+                : 'border border-black/20 bg-white text-black hover:bg-black/5'
+            }`}>
+            <ShoppingCart className="w-4 h-4" />
+            {isAdding ? 'Adding…' : verdict === 'OK' ? 'Add to My Groceries' : 'Add to My Groceries anyway'}
+          </button>
+        ) : (
+          <p className="text-center text-sm text-[#888]">
+            <button onClick={onClose} className="text-black font-medium underline underline-offset-2">Sign in</button>
+            {' '}to save this to your grocery list
+          </p>
         )}
         <button onClick={onScanAgain}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-black/5 text-black rounded-xl text-sm font-medium hover:bg-black/10 transition-colors">
