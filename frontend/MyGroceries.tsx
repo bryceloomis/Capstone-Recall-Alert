@@ -53,7 +53,7 @@ export const MyGroceries = () => {
     catch { return dateStr; }
   };
 
-  const VerdictBadge = ({ verdict, isRecalled }: { verdict?: string; isRecalled: boolean }) => {
+  const VerdictBadge = ({ verdict, isRecalled }: { verdict?: string | null; isRecalled: boolean }) => {
     if (verdict === 'DONT_BUY' || isRecalled) {
       return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium"><ShieldX className="w-3 h-3" />{isRecalled ? 'Recalled' : "Don't buy"}</span>;
     }
