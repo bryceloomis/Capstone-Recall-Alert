@@ -575,10 +575,10 @@ Do NOT include any additional text explaining the process.
 
 def llm_get_upc(prompt):
     raw_upc = _invoke_bedrock(_UPC_SYSTEM, prompt, max_tokens=512)
-    parsed = _parse_json_response(raw_upc)
+    # parsed = _parse_json_response(raw_upc)
 
-    if isinstance(parsed, str):
-        return parsed
+    if isinstance(raw_upc, str):
+        return raw_upc
     else:
         return ''
     
@@ -620,9 +620,9 @@ Return ONLY a list of state codes with NO additional information. Do NOT include
 
 def llm_get_location(prompt):
     raw_location = _invoke_bedrock(_LOCATION_SYSTEM, prompt, max_tokens=512)
-    parsed = _parse_json_response(raw_location)
+    # parsed = _parse_json_response(raw_location)
 
-    if isinstance(parsed, str):
-        return parsed
+    if isinstance(raw_location, str):
+        return raw_location
     else:
         return ''
