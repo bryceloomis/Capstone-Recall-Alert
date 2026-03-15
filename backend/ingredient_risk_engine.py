@@ -1,6 +1,3 @@
-
-Copy
-
 """
 ingredient_risk_engine.py – Deterministic ingredient risk scoring engine.
 
@@ -52,7 +49,12 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional
 
-from LLM_services import disambiguate_ingredients, DisambiguationResult, explain_recall
+try:
+    from LLM_services import disambiguate_ingredients, DisambiguationResult, explain_recall as _llm_available
+    _LLM_AVAILABLE = True
+except Exception:
+    _LLM_AVAILABLE = False
+    DisambiguationResult = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
@@ -1063,10 +1065,8 @@ def analyse_product_risk(
     #   If Bedrock is unavailable → returns [] → pipeline continues.
     #
     llm_results = []
-    if enable_llm and (user_allergens or user_diets):
+    if enable_llm and _LLM_AVAILABLE and (user_allergens or user_diets):
         try:
-            #from llm_service import disambiguate_ingredients, DisambiguationResult
-
             llm_results = disambiguate_ingredients(
                 parsed_tokens=parsed,
                 full_ingredients_text=ingredients_text,
