@@ -128,7 +128,7 @@ def _generate_fuzzy_alerts() -> int:
         rows = execute_query(
             """
             SELECT id, upc, product_name, brand_name,
-                   recall_date, reason, severity, firm_name, source
+                   recall_date, reason, severity, source
             FROM recalls
             ORDER BY recall_date DESC;
             """
@@ -149,7 +149,6 @@ def _generate_fuzzy_alerts() -> int:
             recall_date=str(r.get("recall_date") or ""),
             reason=r.get("reason") or "",
             severity=r.get("severity") or "",
-            firm_name=r.get("firm_name") or "",
             source=r.get("source") or "FDA",
         )
         for r in rows
@@ -287,7 +286,7 @@ async def get_user_alerts(user_id: str):
             r.recall_date,
             r.reason,
             r.severity,
-            r.firm_name,
+
             r.distribution_pattern,
             r.source
         FROM alerts a
@@ -312,7 +311,6 @@ async def get_user_alerts(user_id: str):
                 "recall_date":  str(r["recall_date"]),
                 "reason":       r["reason"],
                 "severity":     r["severity"] or "",
-                "firm_name":    r["firm_name"] or "",
                 "distribution": r["distribution_pattern"] or "",
                 "source":       r["source"] or "",
             },

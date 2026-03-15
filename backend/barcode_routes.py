@@ -72,7 +72,7 @@ def format_recall(row: dict) -> dict:
         "reason":                row["reason"],
         "hazard_classification": hazard,
         "source":                row.get("source") or "",
-        "firm_name":             row.get("firm_name") or "",
+
         "distribution":          row.get("distribution_pattern") or "",
     }
 

@@ -35,7 +35,7 @@ class RecallCandidate:
     recall_date: str
     reason: str
     severity: str
-    firm_name: str
+
     source: str
 
     @property
