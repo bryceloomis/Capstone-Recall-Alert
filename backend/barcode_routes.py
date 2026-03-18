@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from database import execute_query
 from ingredient_risk_engine import analyse_product_risk
+from state_matcher import is_state_affected
 
 log = logging.getLogger(__name__)
 
@@ -395,13 +396,13 @@ def _cache_product(product: dict) -> None:
 
 
 def _load_user_profile(user_id: int) -> dict:
-    """Load allergens and diet_preferences from users table."""
+    """Load allergens, diet_preferences, and state from users table."""
     rows = execute_query(
-        "SELECT allergens, diet_preferences FROM users WHERE id = %s LIMIT 1;",
+        "SELECT allergens, diet_preferences, state FROM users WHERE id = %s LIMIT 1;",
         (user_id,),
     )
     if not rows:
-        return {"allergens": [], "diets": []}
+        return {"allergens": [], "diets": [], "state": None}
     row = rows[0]
     allergens = row.get("allergens") or []
     diets     = row.get("diet_preferences") or []
@@ -409,7 +410,7 @@ def _load_user_profile(user_id: int) -> dict:
         allergens = [a.strip() for a in allergens.split(",") if a.strip()]
     if isinstance(diets, str):
         diets = [d.strip() for d in diets.split(",") if d.strip()]
-    return {"allergens": allergens, "diets": diets}
+    return {"allergens": allergens, "diets": diets, "state": row.get("state")}
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -427,10 +428,12 @@ async def search_product(search: ProductSearch):
     # Load user profile once if user_id provided
     allergens: list[str] = []
     diets: list[str] = []
+    user_state: Optional[str] = None
     if search.user_id:
         profile = _load_user_profile(search.user_id)
-        allergens = profile["allergens"]
-        diets     = profile["diets"]
+        allergens  = profile["allergens"]
+        diets      = profile["diets"]
+        user_state = profile["state"]
 
     if search.upc:
         upc = search.upc.strip()
@@ -460,6 +463,10 @@ async def search_product(search: ProductSearch):
             product_name=product.get("product_name") or "",
             brand_name=product.get("brand_name") or "",
         )
+        if recall_info:
+            recall_info["state_relevant"] = is_state_affected(
+                user_state, recall_info.get("distribution")
+            )
 
         ingredients_raw = product.get("ingredients") or ""
         ingredients = [i.strip() for i in ingredients_raw.replace("|", ",").split(",") if i.strip()]
@@ -509,6 +516,10 @@ async def search_product(search: ProductSearch):
                 product_name=product.get("product_name") or "",
                 brand_name=product.get("brand_name") or "",
             )
+            if recall_info:
+                recall_info["state_relevant"] = is_state_affected(
+                    user_state, recall_info.get("distribution")
+                )
 
             ingredients_raw = product.get("ingredients") or ""
             risk_report = analyse_product_risk(
@@ -574,10 +585,17 @@ async def submit_product(product: ManualProduct):
     # Run risk analysis
     allergens: list[str] = []
     diets: list[str] = []
+    user_state: Optional[str] = None
     if product.user_id:
         profile = _load_user_profile(product.user_id)
-        allergens = profile["allergens"]
-        diets     = profile["diets"]
+        allergens  = profile["allergens"]
+        diets      = profile["diets"]
+        user_state = profile["state"]
+
+    if recall_info:
+        recall_info["state_relevant"] = is_state_affected(
+            user_state, recall_info.get("distribution")
+        )
 
     risk_report = analyse_product_risk(
         ingredients_text=product.ingredients or "",

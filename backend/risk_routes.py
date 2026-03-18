@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from database import execute_query
 from ingredient_risk_engine import analyse_product_risk
 from barcode_routes import _lookup_off, _cache_product, format_recall, check_recall
+from state_matcher import is_state_affected
  
 log = logging.getLogger(__name__)
  
@@ -33,15 +34,15 @@ router = APIRouter(prefix="/api/risk", tags=["risk"])
  
 def _load_user_profile(user_id: int) -> dict:
     """
-    Fetch allergens and diet_preferences for a user from the DB.
-    Returns {"allergens": [...], "diets": [...]}.
+    Fetch allergens, diet_preferences, and state for a user from the DB.
+    Returns {"allergens": [...], "diets": [...], "state": "XX" | None}.
     """
     rows = execute_query(
-        "SELECT allergens, diet_preferences FROM users WHERE id = %s LIMIT 1;",
+        "SELECT allergens, diet_preferences, state FROM users WHERE id = %s LIMIT 1;",
         (user_id,),
     )
     if not rows:
-        return {"allergens": [], "diets": []}
+        return {"allergens": [], "diets": [], "state": None}
     row = rows[0]
     allergens = row.get("allergens") or []
     diets     = row.get("diet_preferences") or []
@@ -50,7 +51,7 @@ def _load_user_profile(user_id: int) -> dict:
         allergens = [a.strip() for a in allergens.split(",") if a.strip()]
     if isinstance(diets, str):
         diets = [d.strip() for d in diets.split(",") if d.strip()]
-    return {"allergens": allergens, "diets": diets}
+    return {"allergens": allergens, "diets": diets, "state": row.get("state")}
  
  
 def _resolve_product(upc: str) -> Optional[dict]:
@@ -145,10 +146,12 @@ async def scan_barcode_with_risk(
     # Load user profile if signed in
     allergens: list[str] = []
     diets: list[str] = []
+    user_state: Optional[str] = None
     if user_id:
         profile = _load_user_profile(user_id)
-        allergens = profile["allergens"]
-        diets     = profile["diets"]
+        allergens  = profile["allergens"]
+        diets      = profile["diets"]
+        user_state = profile["state"]
  
     recall_info = check_recall(
         upc,
@@ -162,6 +165,10 @@ async def scan_barcode_with_risk(
     #    Stored in recalls.plain_language_summary JSONB column.
     if recall_info:
         recall_info["summary"] = _load_recall_summary(recall_info.get("id"))
+        # Tag whether this recall is relevant to the user's state
+        recall_info["state_relevant"] = is_state_affected(
+            user_state, recall_info.get("distribution")
+        )
  
     # Parse ingredients for display
     ingredients_raw = ingredients_text

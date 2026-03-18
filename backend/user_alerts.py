@@ -19,6 +19,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from database import execute_query
+from state_matcher import is_state_affected
 
 log = logging.getLogger(__name__)
 
@@ -39,16 +40,21 @@ def generate_alerts_for_new_recalls() -> int:
     Returns the number of new alert rows created.
     """
     try:
+        # Join with users table to get user state for distribution filtering
         new_pairs = execute_query(
             """
             SELECT DISTINCT
                 uc.user_id,
-                r.id         AS recall_id,
+                u.state       AS user_state,
+                r.id          AS recall_id,
+                r.distribution_pattern,
                 uc.product_upc,
                 uc.product_name
             FROM user_carts uc
             JOIN recalls r
                 ON uc.product_upc = r.upc
+            JOIN users u
+                ON uc.user_id = u.id
             LEFT JOIN alerts a
                 ON a.user_id = uc.user_id AND a.recall_id = r.id
             WHERE a.id IS NULL;
@@ -56,7 +62,13 @@ def generate_alerts_for_new_recalls() -> int:
         )
 
         count = 0
+        skipped = 0
         for pair in new_pairs:
+            # Filter: only create alert if recall is distributed in the user's state
+            if not is_state_affected(pair.get("user_state"), pair.get("distribution_pattern")):
+                skipped += 1
+                continue
+
             try:
                 execute_query(
                     """
@@ -76,7 +88,7 @@ def generate_alerts_for_new_recalls() -> int:
                 )
 
         if count:
-            log.info("Generated %d new alerts.", count)
+            log.info("Generated %d new alerts (%d skipped — not in user's state).", count, skipped)
         return count
 
     except Exception as exc:
@@ -138,6 +150,10 @@ async def get_user_alerts(user_id: str):
     if uid is None:
         return {"user_id": user_id, "alerts": [], "count": 0}
 
+    # Fetch user state for distribution relevance tagging
+    user_rows = execute_query("SELECT state FROM users WHERE id = %s LIMIT 1;", (uid,))
+    user_state = user_rows[0].get("state") if user_rows else None
+
     rows = execute_query(
         """
         SELECT
@@ -171,6 +187,7 @@ async def get_user_alerts(user_id: str):
             "product_name": r["product_name"] or r["recall_product_name"],
             "viewed":       r["viewed"],
             "created_at":   str(r["created_at"]),
+            "state_relevant": is_state_affected(user_state, r["distribution_pattern"]),
             "recall": {
                 "recall_id":    r["recall_id"],
                 "product_name": r["recall_product_name"],
