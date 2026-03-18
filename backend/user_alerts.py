@@ -1,6 +1,4 @@
 
-Copy
-
 """
 user_alerts.py – Alert generation and email notifications for Recall Alert.
  
@@ -14,7 +12,7 @@ Two responsibilities:
        b) Fuzzy name match — for receipt-scanned cart items (product_upc IS NULL,
           source='receipt'), using TFIDFHybridRecallMatcher from fuzzy_recall_matcher
  
-     Both strategies now filter by distribution_pattern so users only receive
+     Both strategies filter by distribution_pattern so users only receive
      alerts relevant to their state. A recall is considered relevant when:
        - distribution_pattern contains 'USA' (nationwide)
        - distribution_pattern contains the user's two-letter state code
