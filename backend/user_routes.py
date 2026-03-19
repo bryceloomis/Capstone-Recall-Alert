@@ -205,7 +205,7 @@ async def update_user_profile(user_id: int, update: ProfileUpdate):
     return {
         "message": "Profile updated.",
         "user": {
-            "user_id":          u["id"],
+            "id":               u["id"],
             "name":             u["name"],
             "email":            u["email"],
             "state":            u.get("state"),

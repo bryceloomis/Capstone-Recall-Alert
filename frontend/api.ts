@@ -207,8 +207,8 @@ export const updateUserProfile = async (
   userId: number | string,
   updates: { allergens?: string[]; diet_preferences?: string[]; state?: string }
 ): Promise<AuthUser> => {
-  const { data } = await api.patch<AuthUser>(`/api/users/${userId}/profile`, updates);
-  return data;
+  const { data } = await api.patch<{ message: string; user: AuthUser }>(`/api/users/${userId}/profile`, updates);
+  return data.user;
 };
 
 /** Get recall alerts for a user. */
