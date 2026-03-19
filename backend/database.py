@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DB_CONFIG = {
-    "host":        os.getenv("DB_HOST", "food-recall-db.cwbmyoom67nu.us-east-1.rds.amazonaws.com"),
+    "host":        os.getenv("DB_HOST", "food-recall-db.cqjm48os4obt.us-east-1.rds.amazonaws.com"),
     "port":        int(os.getenv("DB_PORT", "5432")),
     "dbname":      os.getenv("DB_NAME", "food_recall"),
     "user":        os.getenv("DB_USER", "postgres"),
