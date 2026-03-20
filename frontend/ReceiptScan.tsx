@@ -4,10 +4,10 @@
  */
 import { useState, useRef } from 'react';
 import { Receipt, Camera, Upload, Loader2, ImageIcon } from 'lucide-react';
-import { scanReceipt, addToCart } from './api';
+import { scanReceipt } from './api';
 import { ReceiptReviewModal } from './ReceiptReviewModal';
 import { useStore } from './store';
-import type { ReceiptScanResult, ReceiptMatchedProduct } from './api';
+import type { ReceiptScanResult } from './api';
 
 export const ReceiptScan = () => {
   const userId      = useStore((state) => state.userId);
@@ -19,7 +19,6 @@ export const ReceiptScan = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [result, setResult]     = useState<ReceiptScanResult | null>(null);
   const [error, setError]       = useState<string | null>(null);
-  const [isAdding, setIsAdding] = useState(false);
   const [addedCount, setAddedCount] = useState<number | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -49,7 +48,7 @@ export const ReceiptScan = () => {
     setIsScanning(true);
     setError(null);
     try {
-      const scanResult = await scanReceipt(file);
+      const scanResult = await scanReceipt(file, userId || undefined);
       setResult(scanResult);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
@@ -59,27 +58,9 @@ export const ReceiptScan = () => {
     }
   };
 
-  const handleAddSelected = async (items: ReceiptMatchedProduct[]) => {
-    if (!isSignedIn) return;
-    setIsAdding(true);
-    let added = 0;
-    for (const item of items) {
-      try {
-        await addToCart({
-          user_id: userId,
-          upc: item.upc || `receipt-${Date.now()}-${added}`,
-          product_name: item.product_name,
-          brand_name: item.brand_name,
-          added_date: new Date().toISOString(),
-        });
-        added++;
-      } catch {
-        // Skip items that fail (e.g. already in cart)
-      }
-    }
-    setIsAdding(false);
+  const handleDone = (cartItemsAdded: number) => {
     setResult(null);
-    setAddedCount(added);
+    setAddedCount(cartItemsAdded);
     setPreview(null);
     setFile(null);
   };
@@ -205,8 +186,7 @@ export const ReceiptScan = () => {
         <ReceiptReviewModal
           result={result}
           isSignedIn={isSignedIn}
-          isAdding={isAdding}
-          onAddSelected={handleAddSelected}
+          onDone={handleDone}
           onClose={() => setResult(null)}
         />
       )}
