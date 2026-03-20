@@ -267,13 +267,25 @@ async def scan_receipt(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty file uploaded.")
 
-    # Step 1: Normalize image
+    # Step 1: Normalize image — resize + compress so Textract always accepts it.
+    # Textract inline-bytes limit: 10 MB. High-res phone photos often exceed this.
+    # We cap the longest side at 2000 px and re-encode as JPEG ≤ 4 MB.
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        if img.format not in ("JPEG", "PNG"):
+        img = img.convert("RGB")  # strip alpha / CMYK / palette modes
+
+        # Resize if either dimension exceeds 2000 px (preserve aspect ratio)
+        max_side = 2000
+        if max(img.width, img.height) > max_side:
+            img.thumbnail((max_side, max_side), Image.LANCZOS)
+
+        # Re-encode as JPEG, reducing quality until under 4 MB
+        for quality in (85, 70, 55):
             buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=90)
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
             image_bytes = buf.getvalue()
+            if len(image_bytes) < 4 * 1024 * 1024:
+                break
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not read image: {exc}")
 
@@ -290,13 +302,14 @@ async def scan_receipt(
             raw_items = _parse_textract_text_fallback(text_response)
 
     except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Textract error: {exc}. "
-                "Check AWS credentials or IAM permissions for textract:AnalyzeExpense."
-            ),
-        )
+        err_str = str(exc)
+        if "InvalidParameterException" in err_str:
+            detail = "Textract could not read the image. Try a clearer, well-lit photo."
+        elif "AccessDeniedException" in err_str or "UnrecognizedClientException" in err_str:
+            detail = "AWS credentials are not configured for Textract on this server."
+        else:
+            detail = f"Textract error: {exc}"
+        raise HTTPException(status_code=502, detail=detail)
 
     # Step 3: Clean/filter OCR lines
     cleaned_items: list[dict] = []
