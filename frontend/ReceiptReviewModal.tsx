@@ -3,7 +3,8 @@
  * Displays recalled items as warnings, safe items as confirmation,
  * then lets the user dismiss. Cart saving happens on the backend during scan.
  */
-import { AlertTriangle, CheckCircle, X, ShoppingCart, Package } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, CheckCircle, X, ShoppingCart, Package, ThumbsDown } from 'lucide-react';
 import type { ReceiptScanResult } from './api';
 
 interface Props {
@@ -14,8 +15,15 @@ interface Props {
 }
 
 export function ReceiptReviewModal({ result, isSignedIn, onDone, onClose }: Props) {
-  const { matched_recalls, safe_items, cart_items_added, total_lines } = result;
-  const totalFound = matched_recalls.length + safe_items.length;
+  const { safe_items, cart_items_added, total_lines } = result;
+
+  // Track which recall matches the user has dismissed as false positives
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+  const dismiss = (idx: number) =>
+    setDismissed((prev) => new Set(prev).add(idx));
+
+  const active_recalls = result.matched_recalls.filter((_, i) => !dismissed.has(i));
+  const totalFound = active_recalls.length + safe_items.length + dismissed.size;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -52,30 +60,50 @@ export function ReceiptReviewModal({ result, isSignedIn, onDone, onClose }: Prop
           )}
 
           {/* Recalled items — shown as warnings */}
-          {matched_recalls.length > 0 && (
+          {active_recalls.length > 0 && (
             <section>
               <h3 className="text-sm font-semibold text-red-700 flex items-center gap-2 mb-3">
                 <AlertTriangle className="w-4 h-4" />
-                Recall alerts ({matched_recalls.length})
+                Recall alerts ({active_recalls.length})
               </h3>
               <div className="space-y-2">
-                {matched_recalls.map((item, idx) => (
-                  <div key={idx} className="p-3 rounded-xl border border-red-200 bg-red-50">
-                    <p className="text-sm font-medium text-black leading-snug">{item.product_name}</p>
-                    {item.brand_name && (
-                      <p className="text-xs text-[#888]">{item.brand_name}</p>
-                    )}
-                    <p className="text-xs text-red-700 mt-1 leading-relaxed">
-                      <span className="font-medium">Reason: </span>{item.recall_info.reason}
-                    </p>
-                    <p className="text-xs text-[#888] mt-1">
-                      {item.recall_info.severity && <span className="mr-2">{item.recall_info.severity}</span>}
-                      {item.recall_info.recall_date}
-                    </p>
-                    <p className="text-xs text-[#888]/60 mt-1 italic">from receipt: "{item.raw_text}"</p>
-                  </div>
-                ))}
+                {result.matched_recalls.map((item, idx) => {
+                  if (dismissed.has(idx)) return null;
+                  return (
+                    <div key={idx} className="p-3 rounded-xl border border-red-200 bg-red-50">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-black leading-snug">{item.product_name}</p>
+                          {item.brand_name && (
+                            <p className="text-xs text-[#888]">{item.brand_name}</p>
+                          )}
+                          <p className="text-xs text-red-700 mt-1 leading-relaxed">
+                            <span className="font-medium">Reason: </span>{item.recall_info.reason}
+                          </p>
+                          <p className="text-xs text-[#888] mt-1">
+                            {item.recall_info.severity && <span className="mr-2">{item.recall_info.severity}</span>}
+                            {item.recall_info.recall_date}
+                          </p>
+                          <p className="text-xs text-[#888]/60 mt-1 italic">from receipt: "{item.raw_text}"</p>
+                        </div>
+                        <button
+                          onClick={() => dismiss(idx)}
+                          title="Not my product"
+                          className="shrink-0 flex items-center gap-1 px-2 py-1 text-xs text-[#888] hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors border border-transparent hover:border-red-200"
+                        >
+                          <ThumbsDown className="w-3 h-3" />
+                          Not mine
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+              {dismissed.size > 0 && (
+                <p className="text-xs text-[#888] mt-2">
+                  {dismissed.size} match{dismissed.size !== 1 ? 'es' : ''} dismissed as not your product.
+                </p>
+              )}
             </section>
           )}
 
