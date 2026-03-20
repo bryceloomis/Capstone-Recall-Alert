@@ -110,7 +110,6 @@ def main():
                         (upc, product_name, brand_name, recall_date, reason,
                          source, severity, distribution_pattern)
                     VALUES %s
-                    ON CONFLICT (product_name, recall_date) DO NOTHING
                     """,
                     rows,
                     page_size=200,
