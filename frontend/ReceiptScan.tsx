@@ -14,6 +14,11 @@ export const ReceiptScan = () => {
   const userProfile = useStore((state) => state.userProfile);
   const isSignedIn  = userProfile != null && (userProfile.name != null || userProfile.email != null);
 
+  // Resolve the numeric user ID — userId store may still be 'test_user' for older sessions
+  const resolvedUserId = (userId && userId !== 'test_user')
+    ? userId
+    : (userProfile?.id ? String(userProfile.id) : undefined);
+
   const [preview, setPreview]   = useState<string | null>(null);
   const [file, setFile]         = useState<File | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -48,7 +53,7 @@ export const ReceiptScan = () => {
     setIsScanning(true);
     setError(null);
     try {
-      const scanResult = await scanReceipt(file, userId || undefined);
+      const scanResult = await scanReceipt(file, resolvedUserId);
       setResult(scanResult);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';

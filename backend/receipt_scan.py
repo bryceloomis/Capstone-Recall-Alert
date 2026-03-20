@@ -162,9 +162,8 @@ def _save_receipt_items_to_cart(uid: int, items: list[dict]) -> int:
             )
             if result:
                 inserted += 1
-        except Exception:
-            # Swallow individual failures so one bad item doesn't abort the rest
-            pass
+        except Exception as e:
+            log.warning("Failed to save receipt item '%s' for user %s: %s", name, uid, e)
     return inserted
 
 
@@ -308,9 +307,8 @@ async def scan_receipt(
     if uid is not None:
         try:
             cart_items_added = _save_receipt_items_to_cart(uid, cleaned_items)
-        except Exception:
-            # Non-fatal: cart save failure doesn't abort the recall check
-            cart_items_added = 0
+        except Exception as e:
+            log.warning("Cart save failed for user %s: %s", uid, e)
 
     # Step 5: Load recall candidates and initialize matcher
     try:
