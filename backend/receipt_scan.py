@@ -61,6 +61,18 @@ def _parse_textract_expense(response: dict) -> list[str]:
     return items
 
 
+def _parse_vendor_name(response: dict) -> Optional[str]:
+    """Extract store/vendor name from Textract AnalyzeExpense SummaryFields."""
+    for doc in response.get("ExpenseDocuments", []):
+        for field in doc.get("SummaryFields", []):
+            field_type = field.get("Type", {}).get("Text", "")
+            if field_type in ("VENDOR_NAME", "NAME"):
+                text = (field.get("ValueDetection") or {}).get("Text", "").strip()
+                if text:
+                    return text
+    return None
+
+
 def _parse_textract_text_fallback(response: dict) -> list[str]:
     """Fallback: extract all text lines from DetectDocumentText response."""
     return [
@@ -134,7 +146,7 @@ def _parse_user_id(user_id: Optional[str]) -> Optional[int]:
         return None
 
 
-def _save_receipt_items_to_cart(uid: int, items: list[dict]) -> int:
+def _save_receipt_items_to_cart(uid: int, items: list[dict], store_name: Optional[str] = None) -> int:
     """
     Upsert all receipt items into user_carts with source='receipt'.
 
@@ -151,14 +163,14 @@ def _save_receipt_items_to_cart(uid: int, items: list[dict]) -> int:
             result = execute_query(
                 """
                 INSERT INTO user_carts
-                    (user_id, product_upc, product_name, brand_name, source)
+                    (user_id, product_upc, product_name, brand_name, source, store_name)
                 VALUES
-                    (%s, NULL, %s, '', 'receipt')
+                    (%s, NULL, %s, '', 'receipt', %s)
                 ON CONFLICT (user_id, product_name) WHERE product_upc IS NULL
                 DO NOTHING
                 RETURNING id;
                 """,
-                (uid, name),
+                (uid, name, store_name),
             )
             if result:
                 inserted += 1
@@ -266,10 +278,12 @@ async def scan_receipt(
         raise HTTPException(status_code=400, detail=f"Could not read image: {exc}")
 
     # Step 2: Textract OCR
+    store_name: Optional[str] = None
     try:
         textract = boto3.client("textract", region_name="us-east-1")
         expense_response = textract.analyze_expense(Document={"Bytes": image_bytes})
         raw_items = _parse_textract_expense(expense_response)
+        store_name = _parse_vendor_name(expense_response)
 
         if not raw_items:
             text_response = textract.detect_document_text(Document={"Bytes": image_bytes})
@@ -300,13 +314,14 @@ async def scan_receipt(
             "safe_items": [],
             "cart_items_added": 0,
             "total_lines": len(raw_items),
+            "store_name": store_name,
         }
 
     # Step 4: Save ALL items to the user's cart (skip for guests)
     cart_items_added = 0
     if uid is not None:
         try:
-            cart_items_added = _save_receipt_items_to_cart(uid, cleaned_items)
+            cart_items_added = _save_receipt_items_to_cart(uid, cleaned_items, store_name)
         except Exception as e:
             log.warning("Cart save failed for user %s: %s", uid, e)
 
@@ -390,4 +405,5 @@ async def scan_receipt(
         "safe_items":       safe_items,
         "cart_items_added": cart_items_added,
         "total_lines":      len(raw_items),
+        "store_name":       store_name,
     }

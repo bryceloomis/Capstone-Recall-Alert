@@ -226,7 +226,7 @@ async def get_user_cart(user_id: str):
 
     rows = execute_query(
         """
-        SELECT product_upc AS upc, product_name, brand_name, added_date, source
+        SELECT product_upc AS upc, product_name, brand_name, added_date, source, store_name
         FROM user_carts
         WHERE user_id = %s
         ORDER BY added_date DESC;
@@ -240,6 +240,7 @@ async def get_user_cart(user_id: str):
             "brand_name":   r["brand_name"],
             "added_date":   str(r["added_date"]),
             "source":       r.get("source", "barcode"),
+            "store_name":   r.get("store_name"),
         }
         for r in rows
     ]

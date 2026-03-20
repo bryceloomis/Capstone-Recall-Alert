@@ -119,6 +119,8 @@ export interface CartItem {
   product_name: string;
   brand_name: string;
   added_date: string;
+  source?: string;
+  store_name?: string | null;
 }
 
 export interface UserCart {
@@ -208,6 +210,7 @@ export interface ReceiptScanResult {
   safe_items: ReceiptSafeItem[];
   cart_items_added: number;
   total_lines: number;
+  store_name?: string | null;
 }
 
 export const COMMON_ALLERGENS = [
