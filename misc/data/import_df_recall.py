@@ -114,7 +114,9 @@ def main():
                     rows,
                     page_size=200,
                 )
-                print(f"Done. Rows inserted: {cur.rowcount}")
+                cur.execute("SELECT COUNT(*) AS total FROM recalls;")
+                total = cur.fetchone()[0]
+                print(f"Done. Total rows in recalls table: {total}")
     finally:
         conn.close()
 
