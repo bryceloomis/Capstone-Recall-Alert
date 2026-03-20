@@ -99,25 +99,28 @@ export function ReceiptReviewModal({ result, isSignedIn, onDone, onClose }: Prop
                   );
                 })}
               </div>
-              {dismissed.size > 0 && (
-                <p className="text-xs text-[#888] mt-2">
-                  {dismissed.size} match{dismissed.size !== 1 ? 'es' : ''} dismissed as not your product.
-                </p>
-              )}
             </section>
           )}
 
-          {/* Safe items — saved to cart */}
-          {safe_items.length > 0 && (
+          {/* Safe items + dismissed recalls — all saved to cart */}
+          {(safe_items.length > 0 || dismissed.size > 0) && (
             <section>
               <h3 className="text-sm font-semibold text-black flex items-center gap-2 mb-3">
                 <CheckCircle className="w-4 h-4 text-emerald-600" />
-                No recalls found ({safe_items.length})
+                Saved to groceries ({safe_items.length + dismissed.size})
               </h3>
               <div className="rounded-xl bg-black/[0.03] border border-black/5 px-4 py-3 space-y-1">
                 {safe_items.map((item, idx) => (
-                  <p key={idx} className="text-xs text-[#888]">{item.cleaned_text}</p>
+                  <p key={`safe-${idx}`} className="text-xs text-[#888]">{item.cleaned_text}</p>
                 ))}
+                {result.matched_recalls.map((item, idx) =>
+                  dismissed.has(idx) ? (
+                    <p key={`dismissed-${idx}`} className="text-xs text-[#888]">
+                      {item.cleaned_text}
+                      <span className="ml-2 text-[10px] text-emerald-600 font-medium">✓ saved</span>
+                    </p>
+                  ) : null
+                )}
               </div>
             </section>
           )}
