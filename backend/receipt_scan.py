@@ -26,7 +26,7 @@ from typing import Optional
 
 import boto3
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from PIL import Image
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 # Register HEIC/HEIF support so iPhone photos work out of the box
@@ -272,6 +272,7 @@ async def scan_receipt(
     # We cap the longest side at 2000 px and re-encode as JPEG ≤ 4 MB.
     try:
         img = Image.open(io.BytesIO(image_bytes))
+        img = ImageOps.exif_transpose(img)  # auto-rotate based on EXIF orientation
         img = img.convert("RGB")  # strip alpha / CMYK / palette modes
 
         # Resize if either dimension exceeds 2000 px (preserve aspect ratio)
