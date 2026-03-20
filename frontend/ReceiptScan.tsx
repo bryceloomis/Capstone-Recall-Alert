@@ -83,7 +83,11 @@ export const ReceiptScan = () => {
       {/* Success confirmation */}
       {addedCount !== null && (
         <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800 flex items-center gap-2">
-          <span className="font-medium">✓ Added {addedCount} item{addedCount !== 1 ? 's' : ''} to My Groceries!</span>
+          <span className="font-medium">
+            {addedCount > 0
+              ? `✓ ${addedCount} item${addedCount !== 1 ? 's' : ''} added to My Groceries`
+              : '✓ Receipt scanned — items already in My Groceries'}
+          </span>
           <button onClick={handleReset} className="ml-auto text-xs text-emerald-700 underline underline-offset-2">
             Scan another
           </button>

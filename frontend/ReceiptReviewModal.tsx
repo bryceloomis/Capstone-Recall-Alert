@@ -97,9 +97,11 @@ export function ReceiptReviewModal({ result, isSignedIn, onDone, onClose }: Prop
 
         {/* Footer */}
         <div className="px-5 pb-5 pt-4 border-t border-black/5 shrink-0 space-y-3">
-          {isSignedIn && cart_items_added > 0 && (
+          {isSignedIn && totalFound > 0 && (
             <p className="text-xs text-center text-emerald-700">
-              ✓ {cart_items_added} item{cart_items_added !== 1 ? 's' : ''} saved to My Groceries
+              {cart_items_added > 0
+                ? `✓ ${cart_items_added} item${cart_items_added !== 1 ? 's' : ''} saved to My Groceries`
+                : '✓ Items already in your grocery list'}
             </p>
           )}
           {!isSignedIn && (
