@@ -21,6 +21,7 @@ export interface RecallInfo {
   recall_date: string;
   reason: string;
   hazard_classification: 'Class I' | 'Class II' | 'Class III';
+  severity?: string;
   source?: string;
   firm_name: string;
   distribution: string;
