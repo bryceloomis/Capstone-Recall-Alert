@@ -1,46 +1,36 @@
 /**
- * My Groceries: signed-in user's saved cart items with risk data per item.
- * Uses risk scan endpoint for each item to show verdict, allergens, diet flags.
+ * My Groceries: signed-in user's saved cart items.
+ * Recall status comes from the pre-computed alerts table (written by the
+ * background recall-refresh job) — no per-item scanning on page load.
  */
-import { useState, useEffect } from 'react';
-import { ShoppingCart, Loader2, LogIn, Trash2, AlertCircle, CheckCircle, ShieldAlert, ShieldX } from 'lucide-react';
+import { useMemo } from 'react';
+import { ShoppingCart, Loader2, LogIn, Trash2, CheckCircle, ShieldX } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useCart, useRemoveFromCart } from './useProduct';
-import { riskScan, scanResponseToProduct } from './api';
+import { useCart, useRemoveFromCart, useAlerts } from './useProduct';
 import { useStore } from './store';
-import type { Product, ScanResponse } from './types';
 
 export const MyGroceries = () => {
   const userId = useStore((s) => s.userId);
   const userProfile = useStore((s) => s.userProfile);
   const isSignedIn = userProfile != null && (userProfile.name != null || userProfile.email != null);
 
-  const { data: cartData, isLoading } = useCart(userId);
+  const { data: cartData, isLoading: cartLoading } = useCart(userId);
+  const { data: alertsData, isLoading: alertsLoading } = useAlerts(userId);
   const removeMutation = useRemoveFromCart();
 
-  const [productDetails, setProductDetails] = useState<Record<string, { product: Product; scan: ScanResponse | null }>>({});
-  const [loadingDetails, setLoadingDetails] = useState(false);
+  // Build a set of recalled product names from the alerts table (case-insensitive)
+  const recalledNames = useMemo(() => {
+    const s = new Set<string>();
+    alertsData?.alerts?.forEach((a) => s.add(a.product_name.toLowerCase().trim()));
+    return s;
+  }, [alertsData]);
 
-  useEffect(() => {
-    if (!cartData?.cart?.length) return;
-    setLoadingDetails(true);
-    Promise.allSettled(
-      cartData.cart.map(async (item) => {
-        try {
-          const scan = await riskScan(item.upc, userId, true);
-          return { upc: item.upc, product: scanResponseToProduct(scan), scan };
-        } catch {
-          return { upc: item.upc, product: { upc: item.upc, product_name: item.product_name, brand_name: item.brand_name, is_recalled: false } as Product, scan: null };
-        }
-      })
-    ).then((results) => {
-      const details: Record<string, { product: Product; scan: ScanResponse | null }> = {};
-      results.forEach((r) => {
-        if (r.status === 'fulfilled') details[r.value.upc] = r.value;
-      });
-      setProductDetails(details);
-    }).finally(() => setLoadingDetails(false));
-  }, [cartData?.cart?.length, userId]);
+  // Build a map product_name → alert details for recalled items
+  const alertByName = useMemo(() => {
+    const m = new Map<string, typeof alertsData.alerts[0]>();
+    alertsData?.alerts?.forEach((a) => m.set(a.product_name.toLowerCase().trim(), a));
+    return m;
+  }, [alertsData]);
 
   const handleRemove = async (upc: string) => {
     if (confirm('Remove this item from your list?')) {
@@ -49,19 +39,14 @@ export const MyGroceries = () => {
   };
 
   const formatDate = (dateStr: string) => {
-    try { return new Date(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }); }
-    catch { return dateStr; }
+    try {
+      return new Date(dateStr).toLocaleDateString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric',
+      });
+    } catch { return dateStr; }
   };
 
-  const VerdictBadge = ({ verdict, isRecalled }: { verdict?: string | null; isRecalled: boolean }) => {
-    if (verdict === 'DONT_BUY' || isRecalled) {
-      return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium"><ShieldX className="w-3 h-3" />{isRecalled ? 'Recalled' : "Don't buy"}</span>;
-    }
-    if (verdict === 'CAUTION') {
-      return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium"><ShieldAlert className="w-3 h-3" />Caution</span>;
-    }
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium"><CheckCircle className="w-3 h-3" />Safe</span>;
-  };
+  const isLoading = cartLoading || alertsLoading;
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
@@ -83,8 +68,11 @@ export const MyGroceries = () => {
           <div>
             <p className="text-sm font-medium text-black">Sign in to see your grocery list</p>
             <p className="text-sm text-[#888] mt-1">Create an account to save products and get recall alerts.</p>
-            <Link to="/" onClick={() => useStore.getState().setHasSeenOnboarding(false)}
-              className="inline-block mt-3 px-4 py-2 bg-black text-white text-sm font-medium rounded-xl hover:opacity-90 transition-opacity">
+            <Link
+              to="/"
+              onClick={() => useStore.getState().setHasSeenOnboarding(false)}
+              className="inline-block mt-3 px-4 py-2 bg-black text-white text-sm font-medium rounded-xl hover:opacity-90 transition-opacity"
+            >
               Sign in or create account
             </Link>
           </div>
@@ -94,7 +82,9 @@ export const MyGroceries = () => {
       {isSignedIn && (
         <>
           {isLoading && (
-            <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#888]" /></div>
+            <div className="flex justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-[#888]" />
+            </div>
           )}
 
           {!isLoading && cartData && cartData.cart.length === 0 && (
@@ -107,85 +97,65 @@ export const MyGroceries = () => {
 
           {!isLoading && cartData && cartData.cart.length > 0 && (
             <div className="space-y-3">
-              {loadingDetails && (
-                <p className="text-xs text-[#888] flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Running risk analysis…
-                </p>
-              )}
               {cartData.cart.map((item) => {
-                const detail = productDetails[item.upc];
-                const product = detail?.product;
-                const scan = detail?.scan;
-                const isRecalled = product?.is_recalled ?? false;
-                const verdict = product?.verdict ?? scan?.verdict;
-                const notifications = scan?.notifications ?? [];
+                const key = item.product_name.toLowerCase().trim();
+                const isRecalled = recalledNames.has(key);
+                const alert = alertByName.get(key);
 
                 return (
-                  <div key={item.upc}
+                  <div
+                    key={item.upc ?? item.product_name}
                     className={`rounded-xl border p-4 bg-white transition-colors ${
-                      verdict === 'DONT_BUY' || isRecalled ? 'border-red-200' :
-                      verdict === 'CAUTION' ? 'border-amber-200' : 'border-black/5'
-                    }`}>
+                      isRecalled ? 'border-red-200' : 'border-black/5'
+                    }`}
+                  >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="font-medium text-black">{item.product_name}</h3>
-                          {product && <VerdictBadge verdict={verdict} isRecalled={isRecalled} />}
+                          {isRecalled ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium">
+                              <ShieldX className="w-3 h-3" /> Recalled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">
+                              <CheckCircle className="w-3 h-3" /> Safe
+                            </span>
+                          )}
                         </div>
-                        <p className="text-sm text-[#888] mt-0.5">{item.brand_name}</p>
 
-                        {/* Notifications */}
-                        {notifications.length > 0 && (
-                          <div className="mt-2 space-y-1">
-                            {notifications.slice(0, 3).map((n, i) => (
-                              <p key={i} className={`text-xs px-2 py-1 rounded ${
-                                n.severity === 'HIGH' ? 'bg-red-50 text-red-700' :
-                                n.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-700' :
-                                'bg-black/[0.02] text-[#555]'
-                              }`}>
-                                <span className="font-medium">{n.title}:</span> {n.message}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Allergen matches */}
-                        {scan?.risk?.allergen_matches && scan.risk.allergen_matches.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {scan.risk.allergen_matches.map((m, i) => (
-                              <span key={i} className="text-[10px] px-2 py-0.5 bg-red-50 text-red-700 rounded-full border border-red-100 font-medium">
-                                {m.allergen}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Diet flags */}
-                        {scan?.risk?.diet_flags && scan.risk.diet_flags.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {scan.risk.diet_flags.map((f, i) => (
-                              <span key={i} className="text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full border border-amber-100 font-medium">
-                                {f.diet}: {f.flagged_token}
-                              </span>
-                            ))}
-                          </div>
+                        {item.brand_name && (
+                          <p className="text-sm text-[#888] mt-0.5">{item.brand_name}</p>
                         )}
 
                         <p className="text-xs text-[#888] mt-2">Added {formatDate(item.added_date)}</p>
                       </div>
 
-                      <button onClick={() => handleRemove(item.upc)} disabled={removeMutation.isPending}
+                      <button
+                        onClick={() => handleRemove(item.upc)}
+                        disabled={removeMutation.isPending}
                         className="p-2 text-[#888] hover:text-red-500 transition-colors rounded-lg hover:bg-red-50 shrink-0"
-                        aria-label="Remove item">
+                        aria-label="Remove item"
+                      >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
 
-                    {isRecalled && product?.recall_info && (
+                    {isRecalled && alert && (
                       <div className="mt-3 pt-3 border-t border-red-100 space-y-1">
-                        <p className="text-xs text-red-700"><span className="font-medium">Reason:</span> {product.recall_info.reason}</p>
-                        <p className="text-xs text-red-700"><span className="font-medium">Class:</span> {product.recall_info.hazard_classification}</p>
-                        {product.recall_info.recall_date && <p className="text-xs text-red-700"><span className="font-medium">Date:</span> {product.recall_info.recall_date}</p>}
+                        <p className="text-xs text-red-700">
+                          <span className="font-medium">Reason:</span> {alert.recall.reason}
+                        </p>
+                        {alert.recall.severity && (
+                          <p className="text-xs text-red-700">
+                            <span className="font-medium">Class:</span> {alert.recall.severity}
+                          </p>
+                        )}
+                        {alert.recall.recall_date && (
+                          <p className="text-xs text-red-700">
+                            <span className="font-medium">Date:</span> {formatDate(String(alert.recall.recall_date))}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -197,7 +167,9 @@ export const MyGroceries = () => {
       )}
 
       <div className="pt-4 border-t border-black/10 text-center">
-        <Link to="/groceries-example" className="text-xs text-[#888] hover:text-black transition-colors">View demo example →</Link>
+        <Link to="/groceries-example" className="text-xs text-[#888] hover:text-black transition-colors">
+          View demo example →
+        </Link>
       </div>
     </div>
   );
