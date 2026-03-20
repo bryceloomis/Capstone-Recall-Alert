@@ -67,7 +67,13 @@ def build_rows(csv_path: Path) -> list[tuple]:
                 skipped += 1
                 continue
 
-            upc          = (line.get("upc") or "").strip()[:50] or None
+            raw_upc = (line.get("upc") or "").strip()
+            # Handle list-format UPCs like "['012345678901', '098765432109']"
+            if raw_upc.startswith("["):
+                import re as _re
+                nums = _re.findall(r"\d{8,13}", raw_upc)
+                raw_upc = nums[0] if nums else ""
+            upc = raw_upc[:50] or None
 
             brand_name   = (line.get("brand_name") or "").strip()[:255]
             source       = (line.get("source") or "FDA").strip().upper()
