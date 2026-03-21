@@ -11,14 +11,13 @@ CSV columns (match DB schema directly):
     source, severity, distribution_pattern, plain_language_summary, created_at
 
 Handles:
-  - Empty UPC → stable placeholder based on product_name + recall_date
+  - Empty UPC → stored as NULL (upc is not the unique key)
   - Date format M/D/YY → YYYY-MM-DD
   - source normalised to uppercase (fda → FDA)
-  - ON CONFLICT (upc, recall_date) DO NOTHING — safe to re-run
+  - ON CONFLICT (product_name, recall_date) DO NOTHING — safe to re-run
 """
 
 import csv
-import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
@@ -51,11 +50,6 @@ def parse_date(raw: str) -> str | None:
     return None
 
 
-def placeholder_upc(product_name: str, recall_date: str) -> str:
-    key = f"{product_name}|{recall_date}"
-    return "NOUPCSN_" + hashlib.md5(key.encode()).hexdigest()[:12].upper()
-
-
 def build_rows(csv_path: Path) -> list[tuple]:
     rows = []
     skipped = 0
@@ -73,9 +67,13 @@ def build_rows(csv_path: Path) -> list[tuple]:
                 skipped += 1
                 continue
 
-            upc          = (line.get("upc") or "").strip()[:50]
-            if not upc:
-                upc = placeholder_upc(product_name, recall_date)
+            raw_upc = (line.get("upc") or "").strip()
+            # Handle list-format UPCs like "['012345678901', '098765432109']"
+            if raw_upc.startswith("["):
+                import re as _re
+                nums = _re.findall(r"\d{8,13}", raw_upc)
+                raw_upc = nums[0] if nums else ""
+            upc = raw_upc[:50] or None
 
             brand_name   = (line.get("brand_name") or "").strip()[:255]
             source       = (line.get("source") or "FDA").strip().upper()
@@ -112,12 +110,13 @@ def main():
                         (upc, product_name, brand_name, recall_date, reason,
                          source, severity, distribution_pattern)
                     VALUES %s
-                    ON CONFLICT (upc, recall_date) DO NOTHING
                     """,
                     rows,
                     page_size=200,
                 )
-                print(f"Done. Rows inserted: {cur.rowcount}")
+                cur.execute("SELECT COUNT(*) AS total FROM recalls;")
+                total = cur.fetchone()[0]
+                print(f"Done. Total rows in recalls table: {total}")
     finally:
         conn.close()
 

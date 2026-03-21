@@ -21,6 +21,7 @@ export interface RecallInfo {
   recall_date: string;
   reason: string;
   hazard_classification: 'Class I' | 'Class II' | 'Class III';
+  severity?: string;
   source?: string;
   firm_name: string;
   distribution: string;
@@ -118,6 +119,8 @@ export interface CartItem {
   product_name: string;
   brand_name: string;
   added_date: string;
+  source?: string;
+  store_name?: string | null;
 }
 
 export interface UserCart {
@@ -184,16 +187,30 @@ export interface ReceiptMatchedProduct {
   upc: string;
   product_name: string;
   brand_name: string;
-  ingredients: string[];
-  is_recalled: boolean;
-  recall_info?: RecallInfo;
-  source?: string;
+  is_recalled: true;
+  recall_info: {
+    id: number;
+    reason: string;
+    recall_date: string;
+    severity: string;
+    source: string;
+  };
+  match_score: number;
+  matcher: string;
+}
+
+export interface ReceiptSafeItem {
+  raw_text: string;
+  cleaned_text: string;
+  is_recalled: false;
 }
 
 export interface ReceiptScanResult {
-  matched: ReceiptMatchedProduct[];
-  unmatched: string[];
+  matched_recalls: ReceiptMatchedProduct[];
+  safe_items: ReceiptSafeItem[];
+  cart_items_added: number;
   total_lines: number;
+  store_name?: string | null;
 }
 
 export const COMMON_ALLERGENS = [

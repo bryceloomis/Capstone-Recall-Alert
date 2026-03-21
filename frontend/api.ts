@@ -5,10 +5,10 @@
 import axios from 'axios';
 import type {
   Product, SearchRequest, SearchResponse, UserCart, CartItem,
-  RecallInfo, ScanResponse, AuthUser, ReceiptScanResult, ReceiptMatchedProduct,
+  RecallInfo, ScanResponse, AuthUser, ReceiptScanResult, ReceiptMatchedProduct, ReceiptSafeItem,
 } from './types';
 
-export type { ReceiptScanResult, ReceiptMatchedProduct };
+export type { ReceiptScanResult, ReceiptMatchedProduct, ReceiptSafeItem };
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -169,9 +169,10 @@ export const removeFromCart = async (userId: string, upc: string) => {
   return data;
 };
 
-export async function scanReceipt(file: File): Promise<ReceiptScanResult> {
+export async function scanReceipt(file: File, userId?: string): Promise<ReceiptScanResult> {
   const formData = new FormData();
   formData.append('file', file);
+  if (userId) formData.append('user_id', userId);
   const res = await fetch(`${API_BASE}/api/receipt/scan`, { method: 'POST', body: formData });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
@@ -207,8 +208,8 @@ export const updateUserProfile = async (
   userId: number | string,
   updates: { allergens?: string[]; diet_preferences?: string[]; state?: string }
 ): Promise<AuthUser> => {
-  const { data } = await api.patch<AuthUser>(`/api/users/${userId}/profile`, updates);
-  return data;
+  const { data } = await api.patch<{ message: string; user: AuthUser }>(`/api/users/${userId}/profile`, updates);
+  return data.user;
 };
 
 /** Get recall alerts for a user. */
