@@ -463,16 +463,27 @@ text into a clear, plain-language summary that a grocery shopper can \
 understand in 5 seconds.
 
 RULES:
-- Return ONLY valid JSON object. No markdown, no backticks.
+- Return ONLY valid JSON object. No markdown, no backticks, no preamble.
 - Write at a 6th-grade reading level.
-- Be direct and actionable.
-- Never downplay severity.
-
+- Be direct and actionable. Never downplay severity.
+- "action" must be one imperative sentence telling the user exactly what to
+  do with this product right now. For Class I recalls, always tell them not
+  to consume the product and to return it for a refund. For Class II, tell
+  them to stop using it and seek a refund or replacement. For Class III,
+  tell them they can continue but should stay informed.
+- "severity_plain" must explain in plain English what the recall class means.
+ 
 Return exactly this JSON structure:
 {
-  "headline": "2-5 word summarizing the recall reason (e.g. 'Possible Listeria contamination')",
-  "what_happened": "1-2 sentences: what is wrong with this product",
-  "who_is_at_risk": "1 sentence: who should be especially careful",
+  "headline": "2-5 words summarizing the recall reason (e.g. 'Possible Listeria contamination')",
+  "what_happened": "1-2 sentences: what is physically wrong with this product",
+  "who_is_at_risk": "1 sentence: who should be especially careful — name specific groups like children, pregnant women, or people with a specific allergy",
+  "action": "1 sentence: the single concrete step the consumer should take right now",
+  "severity_plain": "1 sentence: what this recall class means in plain English (e.g. 'This is a Class I recall — the most serious type, meaning this product could cause serious harm or death.')",
+  "locations": "plain-English description of where this recall applies, e.g. 'Nationwide', 
+  'California, Washington, and Oregon only', or 'Sold online and in stores across the US'. 
+  Convert state codes to full state names. If the distribution string is empty or unknown, 
+  return 'Distribution area unknown — check FDA website for details.'"
 }\
 """
 
@@ -484,6 +495,7 @@ class RecallExplanation:
     what_to_do:     str
     who_is_at_risk: str
     severity_plain: str
+    locations: str # where this recall applies
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -525,9 +537,10 @@ def explain_recall(
             return RecallExplanation(
                 headline=str(parsed.get("headline", "")),
                 what_happened=str(parsed.get("what_happened", "")),
-                what_to_do=str(parsed.get("what_to_do", "")),
                 who_is_at_risk=str(parsed.get("who_is_at_risk", "")),
+                action=str(parsed.get("action") or parsed.get("what_to_do", "")),
                 severity_plain=str(parsed.get("severity_plain", "")),
+                locations=str(parsed.get("locations") or distribution or ""),
             )
         except Exception as exc:
             log.warning("Failed to parse recall explanation: %s", exc)
