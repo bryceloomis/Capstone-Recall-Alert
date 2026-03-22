@@ -26,7 +26,7 @@ from typing import Optional
 
 import boto3
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from PIL import Image
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 # Register HEIC/HEIF support so iPhone photos work out of the box
@@ -59,6 +59,18 @@ def _parse_textract_expense(response: dict) -> list[str]:
                         if text:
                             items.append(text)
     return items
+
+
+def _parse_vendor_name(response: dict) -> Optional[str]:
+    """Extract store/vendor name from Textract AnalyzeExpense SummaryFields."""
+    for doc in response.get("ExpenseDocuments", []):
+        for field in doc.get("SummaryFields", []):
+            field_type = field.get("Type", {}).get("Text", "")
+            if field_type in ("VENDOR_NAME", "NAME"):
+                text = (field.get("ValueDetection") or {}).get("Text", "").strip()
+                if text:
+                    return text
+    return None
 
 
 def _parse_textract_text_fallback(response: dict) -> list[str]:
@@ -134,7 +146,7 @@ def _parse_user_id(user_id: Optional[str]) -> Optional[int]:
         return None
 
 
-def _save_receipt_items_to_cart(uid: int, items: list[dict]) -> int:
+def _save_receipt_items_to_cart(uid: int, items: list[dict], store_name: Optional[str] = None) -> int:
     """
     Upsert all receipt items into user_carts with source='receipt'.
 
@@ -151,20 +163,19 @@ def _save_receipt_items_to_cart(uid: int, items: list[dict]) -> int:
             result = execute_query(
                 """
                 INSERT INTO user_carts
-                    (user_id, product_upc, product_name, brand_name, source)
+                    (user_id, product_upc, product_name, brand_name, source, store_name)
                 VALUES
-                    (%s, NULL, %s, '', 'receipt')
+                    (%s, NULL, %s, '', 'receipt', %s)
                 ON CONFLICT (user_id, product_name) WHERE product_upc IS NULL
                 DO NOTHING
                 RETURNING id;
                 """,
-                (uid, name),
+                (uid, name, store_name),
             )
             if result:
                 inserted += 1
-        except Exception:
-            # Swallow individual failures so one bad item doesn't abort the rest
-            pass
+        except Exception as e:
+            log.warning("Failed to save receipt item '%s' for user %s: %s", name, uid, e)
     return inserted
 
 
@@ -256,34 +267,50 @@ async def scan_receipt(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty file uploaded.")
 
-    # Step 1: Normalize image
+    # Step 1: Normalize image — resize + compress so Textract always accepts it.
+    # Textract inline-bytes limit: 10 MB. High-res phone photos often exceed this.
+    # We cap the longest side at 2000 px and re-encode as JPEG ≤ 4 MB.
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        if img.format not in ("JPEG", "PNG"):
+        img = ImageOps.exif_transpose(img)  # auto-rotate based on EXIF orientation
+        img = img.convert("RGB")  # strip alpha / CMYK / palette modes
+
+        # Resize if either dimension exceeds 2000 px (preserve aspect ratio)
+        max_side = 2000
+        if max(img.width, img.height) > max_side:
+            img.thumbnail((max_side, max_side), Image.LANCZOS)
+
+        # Re-encode as JPEG, reducing quality until under 4 MB
+        for quality in (85, 70, 55):
             buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=90)
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
             image_bytes = buf.getvalue()
+            if len(image_bytes) < 4 * 1024 * 1024:
+                break
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not read image: {exc}")
 
     # Step 2: Textract OCR
+    store_name: Optional[str] = None
     try:
         textract = boto3.client("textract", region_name="us-east-1")
         expense_response = textract.analyze_expense(Document={"Bytes": image_bytes})
         raw_items = _parse_textract_expense(expense_response)
+        store_name = _parse_vendor_name(expense_response)
 
         if not raw_items:
             text_response = textract.detect_document_text(Document={"Bytes": image_bytes})
             raw_items = _parse_textract_text_fallback(text_response)
 
     except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Textract error: {exc}. "
-                "Check AWS credentials or IAM permissions for textract:AnalyzeExpense."
-            ),
-        )
+        err_str = str(exc)
+        if "InvalidParameterException" in err_str:
+            detail = "Textract could not read the image. Try a clearer, well-lit photo."
+        elif "AccessDeniedException" in err_str or "UnrecognizedClientException" in err_str:
+            detail = "AWS credentials are not configured for Textract on this server."
+        else:
+            detail = f"Textract error: {exc}"
+        raise HTTPException(status_code=502, detail=detail)
 
     # Step 3: Clean/filter OCR lines
     cleaned_items: list[dict] = []
@@ -301,16 +328,16 @@ async def scan_receipt(
             "safe_items": [],
             "cart_items_added": 0,
             "total_lines": len(raw_items),
+            "store_name": store_name,
         }
 
     # Step 4: Save ALL items to the user's cart (skip for guests)
     cart_items_added = 0
     if uid is not None:
         try:
-            cart_items_added = _save_receipt_items_to_cart(uid, cleaned_items)
-        except Exception:
-            # Non-fatal: cart save failure doesn't abort the recall check
-            cart_items_added = 0
+            cart_items_added = _save_receipt_items_to_cart(uid, cleaned_items, store_name)
+        except Exception as e:
+            log.warning("Cart save failed for user %s: %s", uid, e)
 
     # Step 5: Load recall candidates and initialize matcher
     try:
@@ -392,4 +419,5 @@ async def scan_receipt(
         "safe_items":       safe_items,
         "cart_items_added": cart_items_added,
         "total_lines":      len(raw_items),
+        "store_name":       store_name,
     }

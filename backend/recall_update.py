@@ -12,16 +12,17 @@ Manual trigger: POST /api/admin/refresh-recalls
   Returns: { inserted, skipped, alerts_generated, sources, errors }
 
 Database requirement:
-  The upsert logic uses ON CONFLICT (upc, recall_date) – if that constraint
-  doesn't exist yet on your recalls table, add it once:
+  The upsert logic uses ON CONFLICT (product_name, recall_date) – if that
+  constraint doesn't exist yet on your recalls table, add it once:
 
     ALTER TABLE recalls
-      ADD CONSTRAINT recalls_upc_date_unique UNIQUE (upc, recall_date);
+      ADD CONSTRAINT recalls_product_date_unique UNIQUE (product_name, recall_date);
 
   (Safe to run even if data already exists – Postgres will error only if there
    are existing duplicate rows; fix those first with:
    DELETE FROM recalls a USING recalls b
-   WHERE a.id < b.id AND a.upc = b.upc AND a.recall_date = b.recall_date;)
+   WHERE a.id < b.id AND a.product_name = b.product_name
+     AND a.recall_date = b.recall_date;)
 """
 
 from __future__ import annotations
@@ -389,19 +390,19 @@ def _generate_recall_summary(recall_record: dict) -> None:
             execute_query(
                 """UPDATE recalls
                    SET plain_language_summary = %s
-                   WHERE upc = %s AND recall_date = %s;""",
+                   WHERE product_name = %s AND recall_date = %s;""",
                 (
                     json.dumps(explanation.to_dict()),
-                    recall_record["upc"],
+                    recall_record["product_name"],
                     recall_record["recall_date"],
                 ),
             )
-            log.info("Generated recall summary for upc=%s", recall_record["upc"])
+            log.info("Generated recall summary for product=%s", recall_record["product_name"])
     except ImportError:
         log.debug("llm_service not available — skipping recall summary.")
     except Exception as exc:
-        log.warning("Failed to generate recall summary for upc=%s: %s",
-                    recall_record.get("upc"), exc)
+        log.warning("Failed to generate recall summary for product=%s: %s",
+                    recall_record.get("product_name"), exc)
 
 
 # ── Main refresh pipeline ─────────────────────────────────────────────────────
