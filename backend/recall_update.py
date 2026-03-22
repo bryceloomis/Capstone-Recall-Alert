@@ -179,7 +179,7 @@ def fetch_new_recall_initiation():
                              "distribution_pattern":distribution_pattern_list,
                              "source":"fda"}
                 initiated_items.append(item_dict)
-
+    initiated_items = list(set(initiated_items))
     return initiated_items
 
 def fetch_new_recall_termination():
