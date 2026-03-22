@@ -167,6 +167,7 @@ def fetch_new_recall_initiation():
             distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
             distribution_pattern_str = _llm_get_location(distribution_pattern).replace("'","").strip()
 
+
             upc_list = combined_upc(brand_product, code_information)
             seen = set()
             for upc_individual in upc_list:
