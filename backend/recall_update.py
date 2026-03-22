@@ -94,19 +94,22 @@ def combined_upc(brand_product, code_information):
     code_information_upc = get_upc(code_information)
 
     #use formulaic UPC extraction first, LLM extraction later
-    if brand_product_upc != []:
+    if len(brand_product_upc) != 0:
         upc = brand_product_upc
-    elif code_information_upc != []:
+    elif len(code_information_upc) != 0:
         upc = code_information_upc
     else:
         brand_product_upc_llm = _llm_get_upc(str(brand_product))
+        brand_product_upc_llm_clean = brand_product_upc_llm.replace("'","").split(",")
         code_information_upc_llm = _llm_get_upc(str(code_information))
-        if brand_product_upc_llm != []:
+        code_information_upc_llm_clean = code_information_upc_llm.replace("'","").split(",")
+        if (brand_product_upc_llm[0] != '') & (len(brand_product_upc_llm[0]) < 13):
             upc = brand_product_upc_llm
-        elif code_information_upc_llm != []:
+        elif (code_information_upc_llm[0] != '') & (len(code_information_upc_llm[0]) < 13):
             upc = code_information_upc_llm
         else:
             upc = ''
+    upc = list(set(upc)) #remove duplicates
     return upc
 
 
@@ -145,7 +148,7 @@ def combined_upc(brand_product, code_information):
 
 def fetch_new_recall_initiation():
     from datetime import date, timedelta
-    dt1 = (date.today() - timedelta(days = 35)).strftime("%Y%m%d")
+    dt1 = (date.today() - timedelta(days = 50)).strftime("%Y%m%d")
     dt2 = (date.today()).strftime("%Y%m%d")
     fda_initiated_url = f"https://api.fda.gov/food/enforcement.json?search=recall_initiation_date:[{dt1}+TO+{dt2}]+AND+status:'Ongoing'&limit=1000"
     fda_initiated = req.get(fda_initiated_url).json()
@@ -159,18 +162,23 @@ def fetch_new_recall_initiation():
     else:
         for i in np.arange(0, len(fda_initiated['results'])):
             date = datetime.strptime(fda_initiated['results'][i]['recall_initiation_date'], '%Y%m%d').date()
-            brand_product = fda_initiated['results'][i]['recalling_firm'] + ' ' + fda_initiated['results'][i]['product_description'][:200]
-            code_information = fda_initiated['results'][i]['code_info']
+            brand_product = fda_initiated['results'][i]['recalling_firm'][:100] + ' ' + fda_initiated['results'][i]['product_description'][:400]
+            code_information = fda_initiated['results'][i]['code_info'][:500]
+            
             distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
-            item_dict = {"upc":combined_upc(brand_product, code_information),
-                         "product_name":fda_initiated['results'][i]['product_description'][:200],
-                         "brand_name":fda_initiated['results'][i]['recalling_firm'],
-                         "recall_date":date,
-                         "reason":fda_initiated['results'][i]['reason_for_recall'],
-                         "severity":fda_initiated['results'][i]['classification'],
-                         "distribution_pattern":_llm_get_location(distribution_pattern),
-                         "source":"fda"}
-            initiated_items.append(item_dict)
+            distribution_pattern_list = _llm_get_location(distribution_pattern).replace("'","").replace(" ", "").split(",")
+            
+            upc_list = combined_upc(brand_product, code_information)
+            for upc_individual in upc_list:
+                item_dict = {"upc":upc_individual,
+                             "product_name":fda_initiated['results'][i]['product_description'][:255],
+                             "brand_name":fda_initiated['results'][i]['recalling_firm'],
+                             "recall_date":date,
+                             "reason":fda_initiated['results'][i]['reason_for_recall'],
+                             "severity":fda_initiated['results'][i]['classification'],
+                             "distribution_pattern":distribution_pattern_list,
+                             "source":"fda"}
+                initiated_items.append(item_dict)
 
     return initiated_items
 
@@ -188,7 +196,7 @@ def fetch_new_recall_termination():
         terminated_items.append('')
     else:
         for i in np.arange(0, len(fda_terminated['results'])):
-            item_dict = {"product_name":fda_terminated['results'][i]['product_description'][:200],
+            item_dict = {"product_name":fda_terminated['results'][i]['product_description'][:500],
                          "brand_name":fda_terminated['results'][i]['recalling_firm']}
             terminated_items.append(item_dict)
     return terminated_items
@@ -272,7 +280,7 @@ def add_item_recall(record: dict) -> bool:
             VALUES
               (%(upc)s, %(product_name)s, %(brand_name)s, %(recall_date)s,
                %(reason)s, %(severity)s, %(distribution_pattern)s, %(source)s)
-            ON CONFLICT (product_name, brand_name)
+            ON CONFLICT (upc, product_name, brand_name)
             DO UPDATE SET
                 upc                 = EXCLUDED.upc,
                 reason              = EXCLUDED.reason,
@@ -373,7 +381,7 @@ def _generate_recall_summary(recall_record: dict) -> None:
             product_name=recall_record.get("product_name", ""),
             reason=recall_record.get("reason", ""),
             severity=recall_record.get("severity", ""),
-            firm_name=recall_record.get("brand_name", ""),
+            brand_name=recall_record.get("brand_name", ""),
             distribution=recall_record.get("distribution_pattern", ""),
         )
         if explanation:
@@ -421,7 +429,6 @@ def run_recall_refresh() -> dict:
     initiated_items = fetch_new_recall_initiation()
     log.info("FDA: fetched %d raw records.", len(initiated_items))
     for fda_item in initiated_items:
-        print("what is the item", fda_item)
         was_inserted = add_item_recall(fda_item)
         if was_inserted:
             inserted += 1
@@ -523,5 +530,3 @@ async def manual_refresh_recalls():
     # run_recall_refresh is synchronous (psycopg2 + requests); run in thread
     summary = await asyncio.to_thread(run_recall_refresh)
     return summary
-
-run_recall_refresh()

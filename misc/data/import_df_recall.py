@@ -108,14 +108,14 @@ def main():
                 execute_values(
                     cur,
                     """
+                    DELETE FROM recalls;
                     INSERT INTO recalls
                         (upc, product_name, brand_name, recall_date, reason,
                          source, severity, distribution_pattern)
                     VALUES %s
-                    ON CONFLICT (upc, recall_date) DO NOTHING
                     """,
                     rows,
-                    page_size=200,
+                    page_size=3000,
                 )
                 print(f"Done. Rows inserted: {cur.rowcount}")
     finally:
