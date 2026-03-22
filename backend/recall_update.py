@@ -99,16 +99,14 @@ def combined_upc(brand_product, code_information):
     elif len(code_information_upc) != 0:
         upc = code_information_upc
     else:
-        brand_product_upc_llm = _llm_get_upc(str(brand_product))
-        brand_product_upc_llm_clean = brand_product_upc_llm.replace("'","").split(",")
-        code_information_upc_llm = _llm_get_upc(str(code_information))
-        code_information_upc_llm_clean = code_information_upc_llm.replace("'","").split(",")
-        if (brand_product_upc_llm[0] != '') & (len(brand_product_upc_llm[0]) < 13):
-            upc = brand_product_upc_llm
-        elif (code_information_upc_llm[0] != '') & (len(code_information_upc_llm[0]) < 13):
-            upc = code_information_upc_llm
+        brand_product_upc_llm_clean = _llm_get_upc(str(brand_product)).replace("'","").split(",")
+        code_information_upc_llm_clean = _llm_get_upc(str(code_information)).replace("'","").split(",")
+        if brand_product_upc_llm_clean[0] != '' and len(brand_product_upc_llm_clean[0]) < 13:
+            upc = brand_product_upc_llm_clean
+        elif code_information_upc_llm_clean[0] != '' and len(code_information_upc_llm_clean[0]) < 13:
+            upc = code_information_upc_llm_clean
         else:
-            upc = ''
+            upc = []
     upc = list(set(upc)) #remove duplicates
     return upc
 
@@ -166,20 +164,24 @@ def fetch_new_recall_initiation():
             code_information = fda_initiated['results'][i]['code_info'][:500]
             
             distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
-            distribution_pattern_list = _llm_get_location(distribution_pattern).replace("'","").replace(" ", "").split(",")
-            
+            distribution_pattern_str = _llm_get_location(distribution_pattern).replace("'","").strip()
+
             upc_list = combined_upc(brand_product, code_information)
+            seen = set()
             for upc_individual in upc_list:
+                key = (upc_individual, fda_initiated['results'][i]['product_description'][:255])
+                if key in seen:
+                    continue
+                seen.add(key)
                 item_dict = {"upc":upc_individual,
                              "product_name":fda_initiated['results'][i]['product_description'][:255],
                              "brand_name":fda_initiated['results'][i]['recalling_firm'],
                              "recall_date":date,
                              "reason":fda_initiated['results'][i]['reason_for_recall'],
                              "severity":fda_initiated['results'][i]['classification'],
-                             "distribution_pattern":distribution_pattern_list,
+                             "distribution_pattern":distribution_pattern_str,
                              "source":"fda"}
                 initiated_items.append(item_dict)
-    initiated_items = list(set(initiated_items))
     return initiated_items
 
 def fetch_new_recall_termination():
@@ -280,9 +282,8 @@ def add_item_recall(record: dict) -> bool:
             VALUES
               (%(upc)s, %(product_name)s, %(brand_name)s, %(recall_date)s,
                %(reason)s, %(severity)s, %(distribution_pattern)s, %(source)s)
-            ON CONFLICT (upc, product_name, brand_name)
+            ON CONFLICT (upc, recall_date)
             DO UPDATE SET
-                upc                 = EXCLUDED.upc,
                 reason              = EXCLUDED.reason,
                 severity            = EXCLUDED.severity,
                 distribution_pattern = EXCLUDED.distribution_pattern,
