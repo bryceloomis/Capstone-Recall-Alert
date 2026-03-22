@@ -38,7 +38,8 @@ DB_CONFIG = {
     "sslmode":  "require",
 }
 
-CSV_PATH = Path(__file__).parent / "df_recall.csv"
+# CSV_PATH = Path(__file__).parent / "df_recall.csv"
+CSV_PATH = "df_recall.csv"
 
 
 def parse_date(raw: str) -> str | None:

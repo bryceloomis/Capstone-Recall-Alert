@@ -5,7 +5,7 @@ migrations = [
     "ALTER TABLE recalls ADD COLUMN IF NOT EXISTS distribution_pattern VARCHAR(500);",
     "ALTER TABLE recalls ALTER COLUMN upc TYPE VARCHAR(50);",
     "ALTER TABLE recalls DROP CONSTRAINT recalls_upc_date_unique;",
-    "ALTER TABLE recalls ADD CONSTRAINT recalls_product_brand_unique UNIQUE (product_name, brand_name);",
+    "ALTER TABLE recalls ADD CONSTRAINT recalls_product_brand_unique UNIQUE (upc, product_name, brand_name);",
     "ALTER TABLE alerts RENAME COLUMN sent_at TO created_at;",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);",
 ]

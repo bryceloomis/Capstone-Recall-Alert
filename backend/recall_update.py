@@ -104,9 +104,9 @@ def combined_upc(brand_product, code_information):
         code_information_upc_llm = _llm_get_upc(str(code_information))
         code_information_upc_llm_clean = code_information_upc_llm.replace("'","").split(",")
         if (brand_product_upc_llm[0] != '') & (len(brand_product_upc_llm[0]) < 13):
-            upc = brand_product_upc_llm
+            upc = brand_product_upc_llm_clean
         elif (code_information_upc_llm[0] != '') & (len(code_information_upc_llm[0]) < 13):
-            upc = code_information_upc_llm
+            upc = code_information_upc_llm_clean
         else:
             upc = ''
     upc = list(set(upc)) #remove duplicates
@@ -166,7 +166,7 @@ def fetch_new_recall_initiation():
             code_information = fda_initiated['results'][i]['code_info'][:500]
             
             distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
-            distribution_pattern_list = _llm_get_location(distribution_pattern).replace("'","").replace(" ", "").split(",")
+            # distribution_pattern_list = _llm_get_location(distribution_pattern).replace("'","").replace(" ", "").split(",")
             
             upc_list = combined_upc(brand_product, code_information)
             for upc_individual in upc_list:
@@ -176,9 +176,10 @@ def fetch_new_recall_initiation():
                              "recall_date":date,
                              "reason":fda_initiated['results'][i]['reason_for_recall'],
                              "severity":fda_initiated['results'][i]['classification'],
-                             "distribution_pattern":distribution_pattern_list,
+                             "distribution_pattern":_llm_get_location(distribution_pattern),
                              "source":"fda"}
-                initiated_items.append(item_dict)
+                if item_dict not in initiated_items:
+                    initiated_items.append(item_dict)
     initiated_items = list(set(initiated_items))
     return initiated_items
 
