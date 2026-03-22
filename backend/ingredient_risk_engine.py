@@ -1,4 +1,3 @@
-
 """
 ingredient_risk_engine.py – Deterministic ingredient risk scoring engine.
  
@@ -132,6 +131,44 @@ ALLERGEN_COMPOUND_EXCLUSIONS: dict[str, frozenset] = {
     # "cream" — plant-based only
     "cream": frozenset({
         "coconut cream", "oat cream", "cashew cream", "almond cream",
+    }),
+    # "wheat" — ingredients whose names contain "wheat" but are NOT wheat-derived
+    # "buckwheat" is a seed (Polygonaceae family), unrelated to wheat despite the name.
+    # "wheatgrass juice powder" is sometimes used in products but IS wheat — intentionally
+    # excluded from this list so it continues to fire correctly.
+    "wheat": frozenset({
+        "buckwheat",           # pseudocereal — not wheat, naturally gluten-free
+        "buckwheat flour",     # same
+        "buckwheat groats",    # same
+        "buckwheat flakes",    # same
+        "buckwheat noodles",   # soba noodles — often pure buckwheat
+    }),
+    # "flour" — non-wheat flours that match the Wheat synonym "flour" via substring
+    # These are safe for Wheat allergy (they are nut/seed/root-derived, not wheat).
+    # Note: Rice flour IS blocked for Gluten-Free diet users (by design — the GF
+    # forbidden set contains "flour" to catch all unqualified flour references and
+    # relies on the label to say "rice flour" explicitly when it is GF-safe).
+    "flour": frozenset({
+        "almond flour",      # tree nut — not wheat
+        "coconut flour",     # coconut — not wheat
+        "rice flour",        # rice — not wheat (but not GF-certified by default)
+        "oat flour",         # oats — not wheat (but may contain gluten)
+        "chickpea flour",    # legume — not wheat
+        "tapioca flour",     # cassava — not wheat
+        "cassava flour",     # cassava — not wheat
+        "potato flour",      # potato — not wheat
+        "corn flour",        # corn — not wheat
+        "soy flour",         # soy — not wheat
+        "buckwheat flour",   # buckwheat — not wheat despite name (gluten-free grain)
+        "teff flour",        # teff — not wheat
+        "sorghum flour",     # sorghum — not wheat
+        "quinoa flour",      # quinoa — not wheat
+        "hemp flour",        # hemp — not wheat
+        "flaxseed flour",    # flax — not wheat
+        "sunflower flour",   # sunflower seed — not wheat
+        "hazelnut flour",    # hazelnut — not wheat
+        "chestnut flour",    # chestnut — not wheat
+        "tiger nut flour",   # tiger nut — not wheat
     }),
 }
  
@@ -681,17 +718,38 @@ def detect_allergens(
         for synonym in synonyms:
             if len(synonym) < 3:
                 continue
-            excluded_tokens = ALLERGEN_COMPOUND_EXCLUSIONS.get(synonym, frozenset())
             for token in tokens:
-                if synonym in token and (allergen_name, token) not in matches:
+                if synonym not in token:
+                    continue
+                if (allergen_name, token) in matches:
+                    continue
+                # Compound exclusion check.
+                # The exclusion dict is keyed by the SHORT trigger word, not the
+                # full synonym string. "wheat flour" (a multi-word synonym) hits
+                # "buckwheat flour" — we need to check each word of the synonym
+                # against the exclusion dict, not the full synonym string.
+                # e.g. synonym="wheat flour" → check keys "wheat" AND "flour".
+                # If the token is excluded under ANY of those root words, skip it.
+                synonym_words = synonym.split()
+                is_excluded = False
+                for word in synonym_words:
+                    excluded_tokens = ALLERGEN_COMPOUND_EXCLUSIONS.get(word, frozenset())
                     if token in excluded_tokens:
-                        continue
-                    matches[(allergen_name, token)] = AllergenMatch(
-                        allergen=allergen_name,
-                        matched_token=token,
-                        confidence=Confidence.PROBABLE,
-                        severity=severity,
-                    )
+                        is_excluded = True
+                        break
+                # Also check the full synonym string as a key (original behaviour)
+                if not is_excluded:
+                    excluded_tokens = ALLERGEN_COMPOUND_EXCLUSIONS.get(synonym, frozenset())
+                    if token in excluded_tokens:
+                        is_excluded = True
+                if is_excluded:
+                    continue
+                matches[(allergen_name, token)] = AllergenMatch(
+                    allergen=allergen_name,
+                    matched_token=token,
+                    confidence=Confidence.PROBABLE,
+                    severity=severity,
+                )
  
         # ── Pass 3: advisory / "may contain" phrases ──────────────────────────
         #   Matches phrases like "May Contain Peanuts", "Produced in a facility
@@ -920,8 +978,10 @@ _MIN_INGREDIENTS_FOR_CONFIDENCE = 2
  
 @dataclass
 class HardStop:
-    gate:   str   # RECALL | ALLERGEN | DIET_STRICT
-    reason: str   # human-readable explanation bullet
+    gate:    str            # RECALL | ALLERGEN | DIET_STRICT
+    reason:  str            # human-readable explanation bullet
+    allergen: str = ""      # canonical allergen name for ALLERGEN gate; "" otherwise
+    diet:     str = ""      # diet name for DIET_STRICT gate; "" otherwise
  
  
 def _evaluate_hard_stops(
@@ -958,13 +1018,13 @@ def _evaluate_hard_stops(
             )
  
             if m.is_advisory:
-                # Advisory language — wording distinguishes from confirmed ingredient
                 stops.append(HardStop(
                     "ALLERGEN",
                     f"Label warns this product may contain {m.allergen.lower()} "
                     f"(your declared allergen) — '{m.matched_token}' detected in "
                     f"the advisory/cross-contact statement on the label. "
                     f"{severity_note}",
+                    allergen=m.allergen,
                 ))
             elif m.confidence == Confidence.DEFINITE:
                 stops.append(HardStop(
@@ -972,6 +1032,7 @@ def _evaluate_hard_stops(
                     f"Contains {m.allergen.lower()} (your declared allergen) — "
                     f"detected '{m.matched_token}' in the ingredient list. "
                     f"{severity_note}",
+                    allergen=m.allergen,
                 ))
             else:
                 stops.append(HardStop(
@@ -979,6 +1040,7 @@ def _evaluate_hard_stops(
                     f"Likely contains {m.allergen.lower()} (your declared allergen) — "
                     f"'{m.matched_token}' is a known derivative of "
                     f"{m.allergen.lower()}. {severity_note}",
+                    allergen=m.allergen,
                 ))
  
     # Gate 3: strict diet violation (DEFINITE only)
@@ -996,6 +1058,7 @@ def _evaluate_hard_stops(
                     f"{f.diet} means {diet_desc.lower()}."
                 ) if diet_desc else
                 f"Not {f.diet} — contains '{f.flagged_token}'.",
+                diet=f.diet,
             ))
  
     return stops
