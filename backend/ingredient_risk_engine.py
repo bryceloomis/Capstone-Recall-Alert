@@ -18,9 +18,34 @@ Provides three independent risk assessments on a per-product basis:
      Dairy-Free, Paleo).  Each flagged ingredient specifies *why* it is
      incompatible and its confidence level.
  
-  3. COMPOSITE RISK SCORE
-     A point-based score that blends recall status, allergen severity, and
-     diet incompatibility into a single verdict the frontend colour-codes.
+  3. TWO-LAYER VERDICT SYSTEM
+ 
+     Layer 1 — HARD STOPS (binary gates, evaluated first):
+       Gate 1: RECALL      — active FDA recall
+       Gate 2: ALLERGEN    — DEFINITE or PROBABLE allergen match
+                             (includes advisory "may contain" language)
+       Gate 3: DIET_STRICT — DEFINITE violation of a strict diet
+                             (Vegan, Vegetarian, Gluten-Free, Dairy-Free,
+                              Halal, Kosher — NOT Keto or Paleo)
+       Any gate firing → DONT_BUY immediately, Layer 2 skipped.
+ 
+     Layer 2 — SOFT CAUTION SIGNALS (only when no hard stop fired):
+       ADDITIVE       — any single flagged additive → CAUTION immediately,
+                        no point accumulation required.
+                        is_safety_risk=False so frontend renders a softer badge.
+       DIET_SOFT      — PROBABLE diet flag or DEFINITE on non-strict diet
+                        (Keto/Paleo). Point-based: 4–5 pts each.
+                        is_safety_risk=False — preference conflict, not medical.
+       LOW_CONFIDENCE — missing or very short ingredient list. Point-based:
+                        8–12 pts. is_safety_risk=True — unknown = conservative.
+       CROSS_CONTACT  — reserved for POSSIBLE-confidence allergen matches
+                        (not currently assigned by deterministic engine).
+                        is_safety_risk=True.
+ 
+     Verdict rule:
+       any ADDITIVE signal present                    → CAUTION
+       no ADDITIVE but non-additive score ≥ threshold → CAUTION
+       otherwise                                      → OK
  
 All matching is deterministic — no ML model required.  Accuracy comes from
 the breadth of the synonym dictionaries, the multi-pass parsing strategy,
@@ -656,17 +681,15 @@ def detect_allergens(
     Multi-pass matching strategy:
       Pass 1 — exact token match against synonym sets          → DEFINITE
       Pass 2 — substring match with compound exclusion check   → PROBABLE
-               Uses word-boundary regex to promote whole-word
-               compound matches (e.g. "gelatin" in "beef gelatin")
-               to DEFINITE for the diet check equivalent; here in
-               allergen detection all substring matches → PROBABLE.
+               All substring matches are PROBABLE regardless of word boundary.
+               Recall > Precision: even derivative matches (sodium caseinate)
+               trigger a hard stop. Compound exclusion lists handle known
+               plant-based false positives (cocoa butter, oat milk, etc.).
       Pass 3 — advisory phrase extraction ("may contain" etc.)  → PROBABLE
-               Promoted from POSSIBLE so advisory language
-               triggers the ALLERGEN hard stop (DONT_BUY),
-               not just a soft caution signal.
-               The is_advisory=True flag lets notifications show
-               distinct wording: "label warns may contain X"
-               vs "X confirmed in ingredient list".
+               Promoted from POSSIBLE so advisory language triggers the
+               ALLERGEN hard stop (DONT_BUY), not just a soft caution signal.
+               The is_advisory=True flag lets notifications show distinct wording:
+                 "label warns may contain X" vs "X confirmed in ingredient list".
  
     Both DEFINITE and PROBABLE trigger the Layer 1 ALLERGEN hard stop.
     Returns a list of AllergenMatch objects, deduplicated by (allergen, token).
@@ -908,20 +931,36 @@ def check_diet_compatibility(
 #
 #   Layer 1 – HARD STOPS (binary gates) — evaluated first
 #     If ANY gate fires → verdict = DONT_BUY, Layer 2 skipped entirely.
-#       Gate 1: RECALL    — active FDA recall (state-filtered in risk_routes.py)
-#       Gate 2: ALLERGEN  — DEFINITE or PROBABLE allergen match
-#                           (includes advisory "may contain" language)
+#       Gate 1: RECALL      — active FDA recall
+#       Gate 2: ALLERGEN    — DEFINITE or PROBABLE allergen match
+#                             (includes advisory "may contain" language)
 #       Gate 3: DIET_STRICT — DEFINITE violation of a strict diet
 #                             (Vegan, Vegetarian, Gluten-Free, Dairy-Free,
 #                              Halal, Kosher — not Keto or Paleo)
 #
-#   Layer 2 – SOFT CAUTION SIGNALS (point-based) — only when no hard stop
-#     caution_score ≥ CAUTION_THRESHOLD → CAUTION
-#     caution_score < CAUTION_THRESHOLD → OK
-#       CROSS_CONTACT  — PROBABLE diet match or low-confidence ingredient gap
-#       DIET_SOFT      — PROBABLE diet flag or DEFINITE on non-strict diet
-#       ADDITIVE       — known controversial additive (3–6 pts each)
-#       LOW_CONFIDENCE — missing or very short ingredient list (8–12 pts)
+#   Layer 2 – SOFT CAUTION SIGNALS — only when no hard stop fired
+#
+#     ADDITIVE signals (is_safety_risk=False):
+#       Any single flagged additive → CAUTION immediately.
+#       No point accumulation required — the presence of any additive is
+#       sufficient to flip the verdict. The is_safety_risk=False flag tells
+#       the frontend to render a softer badge than allergen/recall CAUTION.
+#
+#     Point-based signals (accumulate toward CAUTION_THRESHOLD=15):
+#       DIET_SOFT (is_safety_risk=False):
+#         • PROBABLE diet flag (subword match) → 5 pts
+#         • DEFINITE violation on non-strict diet (Keto/Paleo) → 4 pts
+#       LOW_CONFIDENCE (is_safety_risk=True):
+#         • Missing ingredient list entirely → 12 pts
+#         • Ingredient list unusually short (<2 tokens) → 8 pts
+#       CROSS_CONTACT (is_safety_risk=True):
+#         • POSSIBLE-confidence allergen match → 8 pts
+#         • Reserved — not currently assigned by the deterministic engine.
+#
+#     Verdict rule (Layer 2 only):
+#       any ADDITIVE signal present                           → CAUTION
+#       no ADDITIVE but non-additive point score ≥ threshold → CAUTION
+#       otherwise                                            → OK
 #
 # ═══════════════════════════════════════════════════════════════════════════════
  
@@ -937,38 +976,43 @@ _STRICT_DIETS = frozenset({
     "Gluten-Free", "Dairy-Free", "Vegan", "Vegetarian", "Halal", "Kosher",
 })
  
-# Score threshold above which soft signals flip the verdict to CAUTION.
+# Score threshold for non-additive soft signals to flip verdict to CAUTION.
+# ADDITIVE signals bypass this threshold entirely — any single additive
+# triggers CAUTION directly regardless of accumulated score.
 CAUTION_THRESHOLD = 15
  
  
 # ── Known controversial additives ─────────────────────────────────────────────
+# Values are plain description strings only — no point score.
+# Any single match triggers CAUTION directly (threshold not used for additives).
+# is_safety_risk=False on all additive signals — health preference, not medical emergency.
  
-FLAGGED_ADDITIVES: dict[str, tuple[str, int]] = {
-    "high fructose corn syrup": ("Linked to metabolic concerns", 6),
-    "hfcs":                     ("High fructose corn syrup", 6),
-    "aspartame":                ("Artificial sweetener; some individuals sensitive", 4),
-    "sucralose":                ("Artificial sweetener", 3),
-    "acesulfame potassium":     ("Artificial sweetener (Ace-K)", 3),
-    "acesulfame k":             ("Artificial sweetener (Ace-K)", 3),
-    "sodium nitrite":           ("Preservative in processed meats", 5),
-    "sodium nitrate":           ("Preservative in processed meats", 5),
-    "bha":                      ("Synthetic antioxidant preservative", 4),
-    "bht":                      ("Synthetic antioxidant preservative", 4),
-    "tbhq":                     ("Synthetic preservative", 4),
-    "monosodium glutamate":     ("MSG; some individuals report sensitivity", 3),
-    "msg":                      ("Monosodium glutamate", 3),
-    "carrageenan":              ("Thickener; debated GI effects", 3),
-    "sodium benzoate":          ("Preservative; may form benzene with vitamin C", 4),
-    "potassium bromate":        ("Flour improver; banned in many countries", 6),
-    "propylparaben":            ("Preservative; endocrine disruptor concerns", 5),
-    "titanium dioxide":         ("Colour additive; banned in EU food since 2022", 5),
-    "red 40":                   ("Synthetic dye; linked to hyperactivity", 4),
-    "red dye 40":               ("Synthetic dye; linked to hyperactivity", 4),
-    "yellow 5":                 ("Synthetic dye (tartrazine)", 4),
-    "yellow 6":                 ("Synthetic dye (sunset yellow)", 4),
-    "blue 1":                   ("Synthetic dye (brilliant blue)", 3),
-    "partially hydrogenated":   ("Source of artificial trans fats", 6),
-    "hydrogenated oil":         ("May contain trans fats", 5),
+FLAGGED_ADDITIVES: dict[str, str] = {
+    "high fructose corn syrup": "Linked to metabolic concerns",
+    "hfcs":                     "High fructose corn syrup — linked to metabolic concerns",
+    "aspartame":                "Artificial sweetener; some individuals sensitive",
+    "sucralose":                "Artificial sweetener",
+    "acesulfame potassium":     "Artificial sweetener (Ace-K)",
+    "acesulfame k":             "Artificial sweetener (Ace-K)",
+    "sodium nitrite":           "Preservative in processed meats",
+    "sodium nitrate":           "Preservative in processed meats",
+    "bha":                      "Synthetic antioxidant preservative",
+    "bht":                      "Synthetic antioxidant preservative",
+    "tbhq":                     "Synthetic preservative",
+    "monosodium glutamate":     "MSG; some individuals report sensitivity",
+    "msg":                      "Monosodium glutamate; some individuals report sensitivity",
+    "carrageenan":              "Thickener; debated GI effects",
+    "sodium benzoate":          "Preservative; may form benzene with vitamin C",
+    "potassium bromate":        "Flour improver; banned in many countries",
+    "propylparaben":            "Preservative; endocrine disruptor concerns",
+    "titanium dioxide":         "Colour additive; banned in EU food since 2022",
+    "red 40":                   "Synthetic dye; linked to hyperactivity in some children",
+    "red dye 40":               "Synthetic dye; linked to hyperactivity in some children",
+    "yellow 5":                 "Synthetic dye (tartrazine)",
+    "yellow 6":                 "Synthetic dye (sunset yellow)",
+    "blue 1":                   "Synthetic dye (brilliant blue)",
+    "partially hydrogenated":   "Source of artificial trans fats",
+    "hydrogenated oil":         "May contain trans fats",
 }
  
 _MIN_INGREDIENTS_FOR_CONFIDENCE = 2
@@ -1068,9 +1112,13 @@ def _evaluate_hard_stops(
  
 @dataclass
 class CautionSignal:
-    category: str   # CROSS_CONTACT | ADDITIVE | DIET_SOFT | LOW_CONFIDENCE
-    detail:   str   # human-readable explanation bullet
-    points:   int
+    category:       str    # CROSS_CONTACT | ADDITIVE | DIET_SOFT | LOW_CONFIDENCE
+    detail:         str    # human-readable explanation bullet
+    points:         int    # used for threshold scoring — ADDITIVE always uses 0
+    is_safety_risk: bool = True
+    # is_safety_risk=False for ADDITIVE and DIET_SOFT — these are health-preference
+    # concerns, not medical emergencies. Frontend should render a softer badge style
+    # (e.g. amber info vs amber warning) to distinguish from safety-critical CAUTION.
  
  
 def _evaluate_caution_signals(
@@ -1081,17 +1129,32 @@ def _evaluate_caution_signals(
     ingredients_text: str,
 ) -> list[CautionSignal]:
     """
-    Layer 2: soft point-based scoring. Only runs when no hard stop fired.
+    Layer 2: soft caution signals. Only runs when no hard stop fired.
  
-    Note: advisory allergen matches (is_advisory=True) are now PROBABLE and
-    are captured by Gate 2 in Layer 1, so they never reach this function.
-    The CROSS_CONTACT signal here fires only for Confidence.POSSIBLE matches
-    (reserved for future use — currently not assigned by the engine).
+    Two distinct sub-systems:
+ 
+    A) ADDITIVE signals — bypass threshold entirely.
+       Any single flagged additive immediately makes the product CAUTION.
+       points=0 for all additive signals (threshold is irrelevant).
+       is_safety_risk=False — health preference, not a medical allergen concern.
+       Frontend should render additive CAUTION with a softer badge than
+       allergen or recall CAUTION.
+ 
+    B) Point-based signals — accumulate toward CAUTION_THRESHOLD (15 pts).
+       DIET_SOFT:      PROBABLE diet flag (5 pts) or DEFINITE on non-strict
+                       diet Keto/Paleo (4 pts). is_safety_risk=False.
+       LOW_CONFIDENCE: missing ingredient list (12 pts) or unusually short
+                       list (8 pts). is_safety_risk=True.
+       CROSS_CONTACT:  POSSIBLE-confidence allergen (8 pts). is_safety_risk=True.
+                       Reserved — not currently assigned by deterministic engine.
+ 
+    The verdict in analyse_product_risk() checks additive presence separately
+    from the point threshold, so both sub-systems operate independently.
     """
     signals: list[CautionSignal] = []
  
-    # CROSS_CONTACT — reserved for POSSIBLE-confidence matches (future use).
-    # Advisory "may contain" matches are now PROBABLE → handled by hard stop.
+    # ── CROSS_CONTACT — reserved for POSSIBLE-confidence matches (future use) ──
+    # Advisory "may contain" matches are PROBABLE → handled by Layer 1 hard stop.
     seen: set[str] = set()
     for m in allergen_matches:
         if m.confidence == Confidence.POSSIBLE and m.allergen not in seen:
@@ -1102,9 +1165,11 @@ def _evaluate_caution_signals(
                 f"possible cross-contamination. Not confirmed in the "
                 f"ingredient list.",
                 8,
+                is_safety_risk=True,
             ))
  
-    # DIET_SOFT — PROBABLE diet flags or DEFINITE on non-strict diets
+    # ── DIET_SOFT — PROBABLE diet flags or DEFINITE on non-strict diets ────────
+    # is_safety_risk=False: diet preference conflicts are not medical emergencies.
     seen_dt: set[tuple[str, str]] = set()
     for f in diet_flags:
         key = (f.diet, f.flagged_token)
@@ -1118,6 +1183,7 @@ def _evaluate_caution_signals(
                 f"Possibly not {f.diet} — '{f.flagged_token}' may be "
                 f"incompatible. Could not confirm from the label text alone.",
                 5,
+                is_safety_risk=False,
             ))
         elif f.confidence == Confidence.DEFINITE and f.diet not in strict_diets:
             signals.append(CautionSignal(
@@ -1128,33 +1194,44 @@ def _evaluate_caution_signals(
                 ) if diet_desc else
                 f"Not {f.diet} — contains '{f.flagged_token}'.",
                 4,
+                is_safety_risk=False,
             ))
  
-    # ADDITIVE — known controversial additives
+    # ── ADDITIVE — any single flagged additive triggers CAUTION directly ────────
+    # No threshold accumulation. points=0 for all additive signals.
+    # is_safety_risk=False — additive concerns are health preferences, not
+    # medical allergen risks. Frontend renders a distinct softer badge style.
+    seen_additives: set[str] = set()
     for token in parsed_ingredients:
-        entry = FLAGGED_ADDITIVES.get(token)
-        if entry:
-            desc, pts = entry
+        # Exact key match
+        desc = FLAGGED_ADDITIVES.get(token)
+        if desc and token not in seen_additives:
+            seen_additives.add(token)
             signals.append(CautionSignal(
                 "ADDITIVE",
                 f"Contains '{token}' — {desc}. "
-                f"This additive is legal but frequently flagged by "
-                f"health-conscious consumers.",
-                pts,
+                f"This additive is legal but flagged by health-conscious consumers.",
+                0,
+                is_safety_risk=False,
             ))
-        else:
-            for additive_key, (desc, pts) in FLAGGED_ADDITIVES.items():
-                if len(additive_key) >= 5 and additive_key in token:
-                    signals.append(CautionSignal(
-                        "ADDITIVE",
-                        f"Contains '{token}' — {desc}. "
-                        f"This additive is legal but frequently flagged by "
-                        f"health-conscious consumers.",
-                        pts,
-                    ))
-                    break
+            continue
+        # Substring match for multi-word additive keys (e.g. "partially hydrogenated"
+        # inside "partially hydrogenated soybean oil")
+        for additive_key, desc in FLAGGED_ADDITIVES.items():
+            if len(additive_key) >= 5 and additive_key in token \
+                    and additive_key not in seen_additives:
+                seen_additives.add(additive_key)
+                signals.append(CautionSignal(
+                    "ADDITIVE",
+                    f"Contains '{token}' — {desc}. "
+                    f"This additive is legal but flagged by health-conscious consumers.",
+                    0,
+                    is_safety_risk=False,
+                ))
+                break
  
-    # LOW_CONFIDENCE — missing or very short ingredient list
+    # ── LOW_CONFIDENCE — missing or very short ingredient list ──────────────────
+    # is_safety_risk=True — unknown ingredient data means we cannot verify safety.
     if not ingredients_text or not ingredients_text.strip():
         signals.append(CautionSignal(
             "LOW_CONFIDENCE",
@@ -1162,6 +1239,7 @@ def _evaluate_caution_signals(
             "for allergens, diet compatibility, or additives. "
             "Check the physical label before consuming.",
             12,
+            is_safety_risk=True,
         ))
     elif len(parsed_ingredients) < _MIN_INGREDIENTS_FOR_CONFIDENCE:
         signals.append(CautionSignal(
@@ -1170,6 +1248,7 @@ def _evaluate_caution_signals(
             f"({len(parsed_ingredients)} item(s)) — the product database may "
             f"have incomplete data. Check the physical label.",
             8,
+            is_safety_risk=True,
         ))
  
     return signals
@@ -1192,7 +1271,7 @@ class RiskReport:
     is_recalled:        bool
  
     hard_stops:         list[HardStop]
-    caution_score:      int
+    caution_score:      int                  # non-additive point total (debug/tuning)
     caution_signals:    list[CautionSignal]
  
     allergen_matches:   list[AllergenMatch]
@@ -1205,7 +1284,15 @@ class RiskReport:
             "explanation":        self.explanation,
             "is_recalled":        self.is_recalled,
             "hard_stops":         [asdict(h) for h in self.hard_stops],
-            "caution_signals":    [asdict(s) for s in self.caution_signals],
+            "caution_signals":    [
+                {
+                    "category":       s.category,
+                    "detail":         s.detail,
+                    "points":         s.points,
+                    "is_safety_risk": s.is_safety_risk,
+                }
+                for s in self.caution_signals
+            ],
             "allergen_count":     len(self.allergen_matches),
             "allergen_matches":   [m.to_dict() for m in self.allergen_matches],
             "diet_flag_count":    len(self.diet_flags),
@@ -1232,8 +1319,15 @@ def analyse_product_risk(
       3. check_diet_compatibility()  — deterministic rule check
       4. disambiguate_ingredients()  — LLM pass (only if enable_llm=True)
       5. _evaluate_hard_stops()      — Layer 1 binary gates
-      6. _evaluate_caution_signals() — Layer 2 soft scoring (skipped if stop)
-      7. Build explanation bullets
+      6. _evaluate_caution_signals() — Layer 2 soft signals (skipped if stop)
+      7. Determine verdict
+      8. Build explanation bullets
+ 
+    Verdict determination (Layer 2):
+      • Any ADDITIVE signal present                           → CAUTION
+        (bypasses threshold — any single additive is sufficient)
+      • No ADDITIVE but non-additive score ≥ CAUTION_THRESHOLD → CAUTION
+      • Otherwise                                            → OK
  
     Parameters
     ----------
@@ -1328,10 +1422,23 @@ def analyse_product_risk(
             strict_diets=strict,
             ingredients_text=ingredients_text,
         )
-        caution_score = sum(s.points for s in caution_signals)
-        verdict = Verdict.CAUTION if caution_score >= CAUTION_THRESHOLD else Verdict.OK
  
-    # ── Step 7: Build explanation bullets ─────────────────────────────────────
+        # ── Step 7: Determine verdict ──────────────────────────────────────────
+        # ADDITIVE signals bypass the point threshold — any single additive
+        # is sufficient to return CAUTION. Non-additive signals (DIET_SOFT,
+        # LOW_CONFIDENCE, CROSS_CONTACT) still accumulate toward the threshold.
+        has_additive_signal = any(s.category == "ADDITIVE" for s in caution_signals)
+        non_additive_score = sum(
+            s.points for s in caution_signals if s.category != "ADDITIVE"
+        )
+        # caution_score kept as total for debugging and future tuning
+        caution_score = sum(s.points for s in caution_signals)
+ 
+        verdict = Verdict.CAUTION if (
+            has_additive_signal or non_additive_score >= CAUTION_THRESHOLD
+        ) else Verdict.OK
+ 
+    # ── Step 8: Build explanation bullets ─────────────────────────────────────
     explanation: list[str] = []
     for h in hard_stops:
         explanation.append(h.reason)
