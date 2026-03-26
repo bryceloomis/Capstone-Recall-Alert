@@ -370,7 +370,7 @@ def _lookup_off(upc: str) -> Optional[dict]:
                 "product_name": product_name[:255],
                 "brand_name":   (p.get("brands") or "").split(",")[0].strip()[:255],
                 "category":     (p.get("categories") or "").split(",")[0].strip()[:100],
-                "ingredients":  (p.get("ingredients_text") or "")[:5000],
+                "ingredients":  (p.get("ingredients_text_debug") or "")[:5000],
                 "image_url":    (p.get("image_url") or "")[:500],
             }
         return None

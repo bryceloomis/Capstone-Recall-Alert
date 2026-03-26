@@ -151,7 +151,7 @@ ALLERGEN_COMPOUND_EXCLUSIONS: dict[str, frozenset] = {
         "oat milk",      "almond milk",    "soy milk",       "coconut milk",
         "rice milk",     "cashew milk",    "hemp milk",      "flax milk",
         "pea milk",      "macadamia milk", "pistachio milk", "hazelnut milk",
-        "potato milk",   "banana milk",    "walnut milk",
+        "potato milk",   "banana milk",    "walnut milk", "oatmilk"
     }),
     # "cream" — plant-based only
     "cream": frozenset({
