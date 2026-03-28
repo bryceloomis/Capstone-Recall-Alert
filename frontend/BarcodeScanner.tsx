@@ -17,6 +17,7 @@ export const BarcodeScanner = ({ onScan, onClose }: BarcodeScannerProps) => {
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
+  const scannedRef = useRef(false);
 
   useEffect(() => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -45,6 +46,7 @@ export const BarcodeScanner = ({ onScan, onClose }: BarcodeScannerProps) => {
   const startCamera = async () => {
     const video = videoRef.current;
     if (!video) return;
+    scannedRef.current = false;
     setError(null);
     try {
       const codeReader = new BrowserMultiFormatReader();
@@ -52,9 +54,10 @@ export const BarcodeScanner = ({ onScan, onClose }: BarcodeScannerProps) => {
         undefined,
         video,
         (result, err, controls) => {
-          if (result) {
+          if (result && !scannedRef.current) {
             const text = result.getText();
             if (text?.trim()) {
+              scannedRef.current = true;
               stopScanning();
               onScan(text.trim());
             }
