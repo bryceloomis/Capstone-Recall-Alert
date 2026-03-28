@@ -26,11 +26,24 @@ API endpoints:
 """
  
 import logging
+import os
 import re
- 
+
 from fastapi import APIRouter, HTTPException
- 
+
 from database import execute_query
+
+# Lazy SES import — requires boto3 + IAM ses:SendEmail permission
+try:
+    import boto3
+    from botocore.exceptions import ClientError as _BotoClientError
+    _SES_CLIENT = boto3.client("ses", region_name="us-east-1")
+    _SES_AVAILABLE = True
+except Exception:
+    _SES_CLIENT = None
+    _SES_AVAILABLE = False
+
+SES_SENDER = os.environ.get("SES_SENDER", "capstone.recallalert@gmail.com")
  
 log = logging.getLogger(__name__)
  
@@ -92,7 +105,7 @@ def _build_distribution_sql_filter(state_column: str) -> str:
 # ── Alert generation ───────────────────────────────────────────────────────────
  
 def _insert_alert(user_id: int, recall_id: int, product_upc: str, product_name: str) -> bool:
-    """Insert a single alert row. Returns True if a new row was created."""
+    """Insert a single alert row, then fire the email. Returns True if a new row was created."""
     try:
         result = execute_query(
             """
@@ -103,6 +116,8 @@ def _insert_alert(user_id: int, recall_id: int, product_upc: str, product_name: 
             """,
             (user_id, recall_id, product_upc, product_name),
         )
+        if result:
+            send_alert_email(user_id, recall_id, product_name)
         return bool(result)
     except Exception as exc:
         log.warning(
@@ -305,17 +320,112 @@ def generate_alerts_for_new_recalls() -> int:
     return total
  
  
-# ── Email notification stub ────────────────────────────────────────────────────
- 
-def send_alert_email(user_id: int, product_name: str) -> None:
+# ── Email notification ─────────────────────────────────────────────────────────
+
+def send_alert_email(user_id: int, recall_id: int, product_name: str) -> None:
     """
-    TODO: Send an email to the user notifying them of a new recall alert.
-    See original file for SES / SendGrid skeleton.
+    Send a recall alert email to the user via AWS SES.
+    Marks email_sent=TRUE on the alert row after a successful send.
+    Silently skips if SES is unavailable or the user has no email address.
     """
-    log.info(
-        "send_alert_email called for user_id=%s product=%s (not yet implemented)",
-        user_id, product_name,
+    if not _SES_AVAILABLE:
+        log.debug("SES not available — skipping email for user=%s", user_id)
+        return
+
+    # Fetch user email + recall details in one shot
+    try:
+        user_rows = execute_query(
+            "SELECT name, email FROM users WHERE id = %s;", (user_id,)
+        )
+        recall_rows = execute_query(
+            "SELECT product_name, brand_name, recall_date, reason, severity FROM recalls WHERE id = %s;",
+            (recall_id,),
+        )
+    except Exception as exc:
+        log.warning("send_alert_email: DB lookup failed user=%s: %s", user_id, exc)
+        return
+
+    if not user_rows or not user_rows[0].get("email"):
+        log.debug("send_alert_email: no email for user=%s — skipping", user_id)
+        return
+
+    user = user_rows[0]
+    recall = recall_rows[0] if recall_rows else {}
+
+    recall_product = recall.get("product_name") or product_name
+    brand          = recall.get("brand_name") or ""
+    recall_date    = str(recall.get("recall_date") or "")
+    reason         = recall.get("reason") or "See FDA website for details."
+    severity       = recall.get("severity") or ""
+
+    subject = f"Recall Alert: A product you bought may be affected"
+
+    body_html = f"""
+    <html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background:#b91c1c; padding:20px; border-radius:8px 8px 0 0;">
+        <h1 style="color:white; margin:0; font-size:20px;">⚠️ Recall Alert</h1>
+      </div>
+      <div style="border:1px solid #e5e7eb; border-top:none; padding:24px; border-radius:0 0 8px 8px;">
+        <p>Hi {user.get('name') or 'there'},</p>
+        <p>A product you recently scanned may be affected by an FDA recall.</p>
+
+        <div style="background:#fef2f2; border-left:4px solid #b91c1c; padding:16px; margin:16px 0; border-radius:4px;">
+          <p style="margin:0 0 8px 0;"><strong>Your item:</strong> {product_name}</p>
+          <p style="margin:0 0 8px 0;"><strong>Recalled product:</strong> {recall_product}{(' — ' + brand) if brand else ''}</p>
+          {'<p style="margin:0 0 8px 0;"><strong>Recall date:</strong> ' + recall_date + '</p>' if recall_date else ''}
+          {'<p style="margin:0 0 8px 0;"><strong>Severity:</strong> ' + severity + '</p>' if severity else ''}
+          <p style="margin:0;"><strong>Reason:</strong> {reason}</p>
+        </div>
+
+        <p>If this product matches what you bought, stop using it and check the
+        <a href="https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts">FDA recall page</a>
+        for return/disposal instructions.</p>
+
+        <p>If this doesn't match your product, you can dismiss this alert in the app.</p>
+
+        <a href="http://54.210.208.14"
+           style="display:inline-block; background:#111827; color:white; padding:12px 24px;
+                  border-radius:6px; text-decoration:none; margin-top:8px;">
+          View in Recall Alert App
+        </a>
+
+        <p style="margin-top:24px; color:#6b7280; font-size:12px;">
+          You received this because you have a Recall Alert account.
+          This alert was generated automatically — if it's a false match, dismiss it in the app.
+        </p>
+      </div>
+    </body></html>
+    """
+
+    body_text = (
+        f"Recall Alert for {user.get('name') or 'you'}\n\n"
+        f"Your item: {product_name}\n"
+        f"Recalled product: {recall_product}{(' — ' + brand) if brand else ''}\n"
+        f"Reason: {reason}\n\n"
+        f"If this matches your product, check: https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts\n"
+        f"You can dismiss this alert in the app if it doesn't match."
     )
+
+    try:
+        _SES_CLIENT.send_email(
+            Source=SES_SENDER,
+            Destination={"ToAddresses": [user["email"]]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": body_text, "Charset": "UTF-8"},
+                    "Html": {"Data": body_html,  "Charset": "UTF-8"},
+                },
+            },
+        )
+        # Mark email_sent on the alert row
+        execute_query(
+            "UPDATE alerts SET email_sent = TRUE WHERE user_id = %s AND recall_id = %s;",
+            (user_id, recall_id),
+        )
+        log.info("Recall alert email sent to user=%s (%s)", user_id, user["email"])
+    except Exception as exc:
+        log.warning("SES send failed for user=%s: %s", user_id, exc)
  
  
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -348,6 +458,7 @@ async def get_user_alerts(user_id: str):
             a.created_at,
             a.viewed,
             a.email_sent,
+            a.dismissed,
             r.id            AS recall_id,
             r.product_name  AS recall_product_name,
             r.brand_name,
@@ -359,6 +470,7 @@ async def get_user_alerts(user_id: str):
         FROM alerts a
         JOIN recalls r ON a.recall_id = r.id
         WHERE a.user_id = %s
+          AND (a.dismissed IS NULL OR a.dismissed = FALSE)
         ORDER BY a.viewed ASC, a.created_at DESC;
         """,
         (uid,),
@@ -370,6 +482,7 @@ async def get_user_alerts(user_id: str):
             "product_upc":  r["product_upc"],
             "product_name": r["product_name"] or r["recall_product_name"],
             "viewed":       r["viewed"],
+            "dismissed":    r.get("dismissed") or False,
             "created_at":   str(r["created_at"]),
             "recall": {
                 "recall_id":    r["recall_id"],
@@ -408,3 +521,56 @@ async def mark_alert_viewed(alert_id: int):
     if not result:
         raise HTTPException(status_code=404, detail="Alert not found.")
     return {"alert_id": result[0]["id"], "viewed": result[0]["viewed"]}
+
+
+@router.patch("/api/alerts/{alert_id}/dismiss")
+async def dismiss_alert(alert_id: int):
+    """
+    User says 'that's not my product' — marks the alert as dismissed.
+    Dismissed alerts are hidden from the main alerts view but not deleted.
+    """
+    result = execute_query(
+        """
+        UPDATE alerts
+        SET dismissed = TRUE, viewed = TRUE
+        WHERE id = %s
+        RETURNING id, dismissed;
+        """,
+        (alert_id,),
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+    return {"alert_id": result[0]["id"], "dismissed": result[0]["dismissed"]}
+
+
+@router.post("/api/admin/test-recall")
+async def inject_test_recall(product_name: str, reason: str = "Test recall for demo purposes", severity: str = "Class II"):
+    """
+    Admin endpoint: insert a fake recall matching a product name, then run alert generation.
+    Use this to demo/test the full recall → alert → email pipeline without waiting for FDA.
+
+    Example:
+      POST /api/admin/test-recall?product_name=Organic+Spinach
+    """
+    from datetime import date
+    result = execute_query(
+        """
+        INSERT INTO recalls (product_name, brand_name, recall_date, reason, severity, source)
+        VALUES (%s, 'TEST', %s, %s, %s, 'TEST')
+        RETURNING id;
+        """,
+        (product_name, date.today().isoformat(), reason, severity),
+    )
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to insert test recall.")
+
+    recall_id = result[0]["id"]
+    from user_alerts import generate_alerts_for_new_recalls
+    alerts_created = generate_alerts_for_new_recalls()
+
+    return {
+        "recall_id":      recall_id,
+        "product_name":   product_name,
+        "alerts_created": alerts_created,
+        "message":        f"Test recall inserted (id={recall_id}). {alerts_created} alert(s) generated.",
+    }
