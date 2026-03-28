@@ -352,8 +352,14 @@ def _build_notifications(
                            Fallback for WHAT HAPPENED card when recall_summary
                            is None (Bedrock unavailable or record just ingested).
     """
-    from LLM_services import _fallback_action   # deterministic action fallback
- 
+    def _fallback_action(severity: str) -> str:
+        s = (severity or "").lower()
+        if "class i" in s or "class 1" in s:
+            return "Do not eat, use, or sell this product. Return it to the store or dispose of it immediately."
+        if "class ii" in s or "class 2" in s:
+            return "Stop using this product. Return it to the store or follow the manufacturer's disposal instructions."
+        return "Use caution. Check the FDA recall page for return or disposal instructions."
+
     notifications: list[dict] = []
  
     # ─────────────────────────────────────────────────────────────────────────
