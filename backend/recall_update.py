@@ -502,14 +502,14 @@ def start_recall_scheduler():
     _scheduler.add_job(
         run_recall_refresh,
         trigger="interval",
-        hours=6,
+        hours=24,
         id="recall_refresh",
         replace_existing=True,
-        max_instances=1,           # don't stack if a run takes >6 hours
-        misfire_grace_time=300,    # 5-minute grace window if server is busy
+        max_instances=1,
+        misfire_grace_time=300,
     )
     _scheduler.start()
-    log.info("Recall scheduler started – refresh every 6 hours.")
+    log.info("Recall scheduler started – refresh every 24 hours.")
 
     # Run once immediately on startup so the DB is fresh right away
     # (comment out if you don't want an immediate run on every deploy)
