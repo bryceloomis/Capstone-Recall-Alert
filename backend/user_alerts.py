@@ -33,17 +33,13 @@ from fastapi import APIRouter, HTTPException
 
 from database import execute_query
 
-# Lazy SES import — requires boto3 + IAM ses:SendEmail permission
-try:
-    import boto3
-    from botocore.exceptions import ClientError as _BotoClientError
-    _SES_CLIENT = boto3.client("ses", region_name="us-east-1")
-    _SES_AVAILABLE = True
-except Exception:
-    _SES_CLIENT = None
-    _SES_AVAILABLE = False
+import smtplib
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
-SES_SENDER = os.environ.get("SES_SENDER", "capstone.recallalert@gmail.com")
+GMAIL_SENDER   = "capstone.recallalert@gmail.com"
+GMAIL_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
  
 log = logging.getLogger(__name__)
  
@@ -324,15 +320,14 @@ def generate_alerts_for_new_recalls() -> int:
 
 def send_alert_email(user_id: int, recall_id: int, product_name: str) -> None:
     """
-    Send a recall alert email to the user via AWS SES.
+    Send a recall alert email via Gmail SMTP.
     Marks email_sent=TRUE on the alert row after a successful send.
-    Silently skips if SES is unavailable or the user has no email address.
+    Silently skips if GMAIL_APP_PASSWORD is not set or user has no email.
     """
-    if not _SES_AVAILABLE:
-        log.debug("SES not available — skipping email for user=%s", user_id)
+    if not GMAIL_PASSWORD:
+        log.debug("GMAIL_APP_PASSWORD not set — skipping email for user=%s", user_id)
         return
 
-    # Fetch user email + recall details in one shot
     try:
         user_rows = execute_query(
             "SELECT name, email FROM users WHERE id = %s;", (user_id,)
@@ -358,38 +353,33 @@ def send_alert_email(user_id: int, recall_id: int, product_name: str) -> None:
     reason         = recall.get("reason") or "See FDA website for details."
     severity       = recall.get("severity") or ""
 
-    subject = f"Recall Alert: A product you bought may be affected"
+    subject = "Recall Alert: A product you bought may be affected"
 
     body_html = f"""
     <html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background:#b91c1c; padding:20px; border-radius:8px 8px 0 0;">
-        <h1 style="color:white; margin:0; font-size:20px;">⚠️ Recall Alert</h1>
+        <h1 style="color:white; margin:0; font-size:20px;">&#9888;&#65039; Recall Alert</h1>
       </div>
       <div style="border:1px solid #e5e7eb; border-top:none; padding:24px; border-radius:0 0 8px 8px;">
         <p>Hi {user.get('name') or 'there'},</p>
         <p>A product you recently scanned may be affected by an FDA recall.</p>
-
         <div style="background:#fef2f2; border-left:4px solid #b91c1c; padding:16px; margin:16px 0; border-radius:4px;">
           <p style="margin:0 0 8px 0;"><strong>Your item:</strong> {product_name}</p>
-          <p style="margin:0 0 8px 0;"><strong>Recalled product:</strong> {recall_product}{(' — ' + brand) if brand else ''}</p>
+          <p style="margin:0 0 8px 0;"><strong>Recalled product:</strong> {recall_product}{(' &mdash; ' + brand) if brand else ''}</p>
           {'<p style="margin:0 0 8px 0;"><strong>Recall date:</strong> ' + recall_date + '</p>' if recall_date else ''}
           {'<p style="margin:0 0 8px 0;"><strong>Severity:</strong> ' + severity + '</p>' if severity else ''}
           <p style="margin:0;"><strong>Reason:</strong> {reason}</p>
         </div>
-
         <p>If this product matches what you bought, stop using it and check the
         <a href="https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts">FDA recall page</a>
         for return/disposal instructions.</p>
-
         <p>If this doesn't match your product, you can dismiss this alert in the app.</p>
-
         <a href="http://54.210.208.14"
-           style="display:inline-block; background:#111827; color:white; padding:12px 24px;
-                  border-radius:6px; text-decoration:none; margin-top:8px;">
+           style="display:inline-block;background:#111827;color:white;padding:12px 24px;
+                  border-radius:6px;text-decoration:none;margin-top:8px;">
           View in Recall Alert App
         </a>
-
-        <p style="margin-top:24px; color:#6b7280; font-size:12px;">
+        <p style="margin-top:24px;color:#6b7280;font-size:12px;">
           You received this because you have a Recall Alert account.
           This alert was generated automatically — if it's a false match, dismiss it in the app.
         </p>
@@ -402,30 +392,30 @@ def send_alert_email(user_id: int, recall_id: int, product_name: str) -> None:
         f"Your item: {product_name}\n"
         f"Recalled product: {recall_product}{(' — ' + brand) if brand else ''}\n"
         f"Reason: {reason}\n\n"
-        f"If this matches your product, check: https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts\n"
-        f"You can dismiss this alert in the app if it doesn't match."
+        f"Check: https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts\n"
+        f"Dismiss in the app if it's not your product."
     )
 
     try:
-        _SES_CLIENT.send_email(
-            Source=SES_SENDER,
-            Destination={"ToAddresses": [user["email"]]},
-            Message={
-                "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": {
-                    "Text": {"Data": body_text, "Charset": "UTF-8"},
-                    "Html": {"Data": body_html,  "Charset": "UTF-8"},
-                },
-            },
-        )
-        # Mark email_sent on the alert row
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"Recall Alert <{GMAIL_SENDER}>"
+        msg["To"]      = user["email"]
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(GMAIL_SENDER, GMAIL_PASSWORD)
+            server.sendmail(GMAIL_SENDER, user["email"], msg.as_string())
+
         execute_query(
             "UPDATE alerts SET email_sent = TRUE WHERE user_id = %s AND recall_id = %s;",
             (user_id, recall_id),
         )
         log.info("Recall alert email sent to user=%s (%s)", user_id, user["email"])
     except Exception as exc:
-        log.warning("SES send failed for user=%s: %s", user_id, exc)
+        log.warning("Email send failed for user=%s: %s", user_id, exc)
  
  
 # ── Helpers ───────────────────────────────────────────────────────────────────
