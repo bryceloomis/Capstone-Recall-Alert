@@ -236,4 +236,10 @@ export const markAlertViewed = async (alertId: number) => {
   return data;
 };
 
+/** Dismiss an alert — user says "that's not my product". */
+export const dismissAlert = async (alertId: number) => {
+  const { data } = await api.patch(`/api/alerts/${alertId}/dismiss`);
+  return data;
+};
+
 export default api;

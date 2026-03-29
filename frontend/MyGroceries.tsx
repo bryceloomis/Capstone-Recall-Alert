@@ -16,7 +16,7 @@ import {
   Receipt, ScanLine, Store,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useCart, useRemoveFromCart, useAlerts } from './useProduct';
+import { useCart, useRemoveFromCart, useAlerts, useDismissAlert } from './useProduct';
 import { useStore } from './store';
 import type { CartItem } from './types';
 
@@ -105,6 +105,7 @@ export const MyGroceries = () => {
   const { data: cartData, isLoading: cartLoading } = useCart(userId);
   const { data: alertsData, isLoading: alertsLoading } = useAlerts(userId);
   const removeMutation = useRemoveFromCart();
+  const dismissMutation = useDismissAlert(userId);
 
   // Recalled product names from alerts (case-insensitive)
   const recalledNames = useMemo(() => {
@@ -293,7 +294,7 @@ export const MyGroceries = () => {
                                     <p className="text-xs text-[#888] mt-0.5">{item.brand_name}</p>
                                   )}
                                   {isRecalled && alert && (
-                                    <div className="mt-2 space-y-0.5">
+                                    <div className="mt-2 space-y-1.5">
                                       <p className="text-xs text-red-700">
                                         <span className="font-medium">Reason:</span> {alert.recall.reason}
                                       </p>
@@ -308,6 +309,13 @@ export const MyGroceries = () => {
                                           {formatDate(String(alert.recall.recall_date))}
                                         </p>
                                       )}
+                                      <button
+                                        onClick={() => dismissMutation.mutate(alert.alert_id)}
+                                        disabled={dismissMutation.isPending}
+                                        className="mt-1 text-xs text-[#888] underline underline-offset-2 hover:text-black transition-colors disabled:opacity-50"
+                                      >
+                                        That's not my product
+                                      </button>
                                     </div>
                                   )}
                                 </div>

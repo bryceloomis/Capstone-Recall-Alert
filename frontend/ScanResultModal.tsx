@@ -4,7 +4,7 @@
  * and product info from GET /api/risk/scan/{upc}.
  */
 import {
-  X, AlertTriangle, CheckCircle, ShoppingCart, Camera, Package,
+  X, AlertTriangle, CheckCircle, ShoppingCart, Camera,
   ShieldAlert, ShieldCheck, ShieldX, AlertCircle, Wheat, Leaf,
 } from 'lucide-react';
 import type { ScanResponse, Product, RiskNotification, AllergenMatch, DietFlag } from './types';
@@ -174,20 +174,10 @@ export const ScanResultModal = ({
         <div className="px-5 py-6 space-y-6">
 
           {/* Product info */}
-          <div className="flex gap-4 items-start">
-            <div className="w-20 h-20 rounded-xl border border-black/10 bg-black/[0.02] flex items-center justify-center shrink-0 overflow-hidden">
-              {product.image_url ? (
-                <img src={product.image_url} alt={product.product_name} className="w-full h-full object-contain"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-              ) : (
-                <Package className="w-8 h-8 text-black/20" />
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="text-lg font-semibold text-black leading-tight">{product.product_name}</h2>
-              {product.brand_name && <p className="text-sm text-[#888] mt-0.5">{product.brand_name}</p>}
-              {product.category && <p className="text-xs text-[#888] mt-1">{product.category}</p>}
-            </div>
+          <div>
+            <h2 className="text-lg font-semibold text-black leading-tight">{product.product_name}</h2>
+            {product.brand_name && <p className="text-sm text-[#888] mt-0.5">{product.brand_name}</p>}
+            {product.category && <p className="text-xs text-[#888] mt-1">{product.category}</p>}
           </div>
 
           {/* Explanation bullets */}
@@ -266,7 +256,7 @@ export const ScanResultModal = ({
       {/* Footer */}
       <div className="shrink-0 px-5 py-4 border-t border-black/10 space-y-3 bg-white">
         {isSignedIn ? (
-          <button onClick={() => onAddToCart(product)} disabled={isAdding}
+          <button onClick={() => { onAddToCart(product); onClose(); }} disabled={isAdding}
             className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-opacity disabled:opacity-50 ${
               verdict === 'OK'
                 ? 'bg-black text-white hover:opacity-90'

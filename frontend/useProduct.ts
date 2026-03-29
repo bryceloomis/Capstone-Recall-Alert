@@ -2,7 +2,7 @@
  * React Query hooks for product search, risk scan, and cart.
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { searchProduct, riskScan, getUserCart, addToCart, removeFromCart, getUserAlerts } from './api';
+import { searchProduct, riskScan, getUserCart, addToCart, removeFromCart, getUserAlerts, dismissAlert } from './api';
 import type { SearchRequest, CartItem, ScanResponse } from './types';
 import { useStore } from './store';
 
@@ -54,5 +54,15 @@ export const useAlerts = (userId: string | number) => {
     queryKey: ['alerts', userId],
     queryFn: () => getUserAlerts(userId),
     enabled: !!userId,
+  });
+};
+
+export const useDismissAlert = (userId: string | number) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (alertId: number) => dismissAlert(alertId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['alerts', userId] });
+    },
   });
 };
