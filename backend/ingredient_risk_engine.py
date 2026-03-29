@@ -650,6 +650,21 @@ def detect_allergens(
                     synonyms = val
                     break
         if synonyms is None:
+            # Custom allergen not in ALLERGEN_SYNONYMS — fall back to a simple
+            # substring/word-boundary check directly against the ingredients text.
+            _pattern = re.compile(
+                r'\b' + re.escape(allergen_name.lower().strip()) + r'\b',
+                re.IGNORECASE,
+            )
+            if _pattern.search(ingredients_text):
+                _k = (allergen_name, allergen_name.lower().strip())
+                if _k not in matches:
+                    matches[_k] = AllergenMatch(
+                        allergen=allergen_name,
+                        matched_token=allergen_name.lower().strip(),
+                        confidence=Confidence.DEFINITE,
+                        severity=Severity.MEDIUM,
+                    )
             continue
  
         severity = (
