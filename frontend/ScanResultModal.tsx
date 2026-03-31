@@ -3,6 +3,7 @@
  * Displays verdict, notifications, allergen matches, diet flags, recall summary,
  * and product info from GET /api/risk/scan/{upc}.
  */
+import { useState } from 'react';
 import {
   X, AlertTriangle, CheckCircle, ShoppingCart, Camera, Package,
   ShieldAlert, ShieldCheck, ShieldX, AlertCircle, Wheat, Leaf,
@@ -44,10 +45,22 @@ const verdictConfig = {
 } as const;
 
 function NotificationCard({ n }: { n: RiskNotification }) {
-  const colors = {
-    HIGH: 'border-red-200 bg-red-50 text-red-900',
-    MEDIUM: 'border-amber-200 bg-amber-50 text-amber-900',
-    LOW: 'border-black/10 bg-black/[0.02] text-black',
+  const [expanded, setExpanded] = useState(false);
+
+  const borderColors = {
+    HIGH: 'border-red-200 bg-red-50',
+    MEDIUM: 'border-amber-200 bg-amber-50',
+    LOW: 'border-black/10 bg-black/[0.02]',
+  };
+  const textColors = {
+    HIGH: 'text-red-900',
+    MEDIUM: 'text-amber-900',
+    LOW: 'text-black',
+  };
+  const badgeColors = {
+    HIGH: 'bg-red-200 text-red-800',
+    MEDIUM: 'bg-amber-200 text-amber-800',
+    LOW: 'bg-black/10 text-black/60',
   };
   const icons = {
     RECALL: AlertTriangle,
@@ -59,15 +72,47 @@ function NotificationCard({ n }: { n: RiskNotification }) {
   const Icon = icons[n.type] ?? AlertCircle;
 
   return (
-    <div className={`rounded-xl border p-3.5 ${colors[n.severity]}`}>
-      <div className="flex items-start gap-3">
-        <Icon className="w-4 h-4 shrink-0 mt-0.5" />
+    <div className={`rounded-xl border ${borderColors[n.severity]} overflow-hidden`}>
+      <div
+        className="flex items-start gap-3 p-3.5 cursor-pointer"
+        onClick={() => n.cards?.length > 0 && setExpanded(!expanded)}
+      >
+        <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${textColors[n.severity]}`} />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold">{n.title}</p>
-          <p className="text-xs mt-0.5 opacity-80">{n.message}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className={`text-sm font-semibold ${textColors[n.severity]}`}>{n.title}</p>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${badgeColors[n.severity]}`}>
+              {n.type}
+            </span>
+            {!n.is_safety_risk && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/5 text-black/50">
+                preference
+              </span>
+            )}
+          </div>
+          <p className={`text-xs mt-0.5 ${textColors[n.severity]} opacity-80`}>
+            {n.summary || n.message}
+          </p>
         </div>
-        <span className="text-[10px] font-mono uppercase opacity-50 shrink-0">{n.type}</span>
+        {n.cards?.length > 0 && (
+          <span className={`text-xs shrink-0 ${textColors[n.severity]} opacity-60`}>
+            {expanded ? '▲' : '▼'}
+          </span>
+        )}
       </div>
+
+      {expanded && n.cards?.length > 0 && (
+        <div className={`border-t ${n.severity === 'HIGH' ? 'border-red-200' : n.severity === 'MEDIUM' ? 'border-amber-200' : 'border-black/10'} divide-y ${n.severity === 'HIGH' ? 'divide-red-100' : n.severity === 'MEDIUM' ? 'divide-amber-100' : 'divide-black/5'}`}>
+          {n.cards.map((card, i) => (
+            <div key={i} className="px-4 py-3">
+              <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${textColors[n.severity]} opacity-60`}>
+                {card.label}
+              </p>
+              <p className={`text-sm ${textColors[n.severity]}`}>{card.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

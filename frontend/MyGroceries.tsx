@@ -138,13 +138,14 @@ export const MyGroceries = () => {
                         {notifications.length > 0 && (
                           <div className="mt-2 space-y-1">
                             {notifications.slice(0, 3).map((n, i) => (
-                              <p key={i} className={`text-xs px-2 py-1 rounded ${
+                              <div key={i} className={`text-xs px-2 py-1.5 rounded ${
                                 n.severity === 'HIGH' ? 'bg-red-50 text-red-700' :
                                 n.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-700' :
                                 'bg-black/[0.02] text-[#555]'
                               }`}>
-                                <span className="font-medium">{n.title}:</span> {n.message}
-                              </p>
+                                <span className="font-semibold">{n.title}: </span>
+                                {n.summary || n.message}
+                              </div>
                             ))}
                           </div>
                         )}
