@@ -172,6 +172,115 @@ def _load_recall_summary(recall_id: Optional[int]) -> Optional[dict]:
 # ENDPOINT
 # ═══════════════════════════════════════════════════════════════════════════════
  
+@router.get("/cart/{user_id}")
+async def batch_cart_risk(user_id: int):
+    """
+    Return verdict + notifications for every item in a user's cart using only
+    data already stored in the DB — no external API calls.
+
+    Items without a UPC (receipt-sourced) or without stored ingredients are
+    returned with verdict=null so the frontend can show "No data".
+
+    Response shape:
+    {
+      "user_id": 15,
+      "results": {
+        "<upc>": {
+          "verdict": "DONT_BUY" | "CAUTION" | "OK" | null,
+          "notifications": [...],
+          "is_recalled": bool,
+          "product_name": str
+        },
+        ...
+      }
+    }
+    """
+    # ── 1. User profile ───────────────────────────────────────────────────────
+    profile    = _load_user_profile(user_id)
+    allergens  = profile["allergens"]
+    diets      = profile["diets"]
+    user_state = profile["state"]
+
+    # ── 2. Cart items ─────────────────────────────────────────────────────────
+    cart_rows = execute_query(
+        """
+        SELECT uc.product_upc AS upc, uc.product_name, uc.brand_name,
+               p.ingredients
+        FROM user_carts uc
+        LEFT JOIN products p ON p.upc = uc.product_upc
+        WHERE uc.user_id = %s AND uc.product_upc IS NOT NULL;
+        """,
+        (user_id,),
+    )
+
+    results: dict = {}
+    for row in cart_rows:
+        upc              = row["upc"]
+        ingredients_text = row.get("ingredients") or ""
+
+        # ── 3. Recall check (DB only, no network) ────────────────────────────
+        recall_info = check_recall(
+            upc,
+            product_name=row.get("product_name") or "",
+            brand_name=row.get("brand_name") or "",
+        )
+
+        # ── 4. State-based recall filtering ──────────────────────────────────
+        if recall_info and user_state:
+            from user_alerts import _state_matches_distribution
+            distribution = (
+                recall_info.get("distribution")
+                or recall_info.get("distribution_pattern")
+                or ""
+            )
+            if not _state_matches_distribution(user_state, distribution):
+                recall_info = None
+
+        if recall_info:
+            recall_info["summary"] = _load_recall_summary(recall_info.get("id"))
+
+        # ── 5. Skip risk analysis if no ingredients stored ───────────────────
+        if not ingredients_text and not recall_info:
+            results[upc] = {
+                "verdict":       None,
+                "notifications": [],
+                "is_recalled":   False,
+                "product_name":  row.get("product_name"),
+            }
+            continue
+
+        # ── 6. Risk analysis (pure Python — no network) ───────────────────────
+        report = analyse_product_risk(
+            ingredients_text=ingredients_text,
+            user_allergens=allergens,
+            user_diets=diets,
+            is_recalled=(recall_info is not None),
+            recall_date=recall_info.get("recall_date") if recall_info else None,
+            enable_llm=False,
+        )
+
+        notifications = _build_notifications(
+            report,
+            recall_summary=(recall_info.get("summary") if recall_info else None),
+            recall_severity=(recall_info.get("severity", "") if recall_info else ""),
+            recall_distribution=(
+                recall_info.get("distribution")
+                or recall_info.get("distribution_pattern")
+                or ""
+            ) if recall_info else "",
+            recall_reason=(recall_info.get("reason", "") if recall_info else ""),
+        )
+
+        results[upc] = {
+            "verdict":       report.verdict,
+            "notifications": notifications,
+            "is_recalled":   recall_info is not None,
+            "product_name":  row.get("product_name"),
+        }
+
+    return {"user_id": user_id, "results": results}
+
+
 @router.get("/scan/{upc}")
 async def scan_barcode_with_risk(
     upc: str,
