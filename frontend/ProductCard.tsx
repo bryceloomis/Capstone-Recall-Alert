@@ -1,14 +1,32 @@
 /**
  * Product card: name, brand, verdict badge, risk notifications, recall details, and add-to-cart.
  */
-import { AlertCircle, CheckCircle, ShoppingCart, ShieldAlert, ShieldX } from 'lucide-react';
-import type { Product } from './types';
+import { useState } from 'react';
+import { AlertCircle, CheckCircle, ShoppingCart, ShieldAlert, ShieldX, Check } from 'lucide-react';
+import type { Product, RiskNotification } from './types';
 import { RecallAlert } from './RecallAlert';
 
 interface ProductCardProps {
   product: Product;
-  onAddToCart?: (product: Product) => void;
+  onAddToCart?: (product: Product) => Promise<void> | void;
   showAddButton?: boolean;
+  alreadyInCart?: boolean;
+}
+
+/**
+ * Derive the effective verdict: if the backend says OK but risk notifications
+ * or caution signals exist, upgrade to CAUTION so the badge is accurate.
+ */
+function effectiveVerdict(product: Product): string | undefined {
+  const v = product.verdict;
+  if (v && v !== 'OK') return v;
+  if (product.is_recalled) return 'DONT_BUY';
+
+  const hasNotifications = product.notifications && product.notifications.length > 0;
+  const hasCautionSignals = product.risk?.caution_signals && product.risk.caution_signals.length > 0;
+  if (hasNotifications || hasCautionSignals) return 'CAUTION';
+
+  return v;
 }
 
 const verdictBadge = (verdict?: string, isRecalled?: boolean) => {
@@ -44,7 +62,22 @@ const verdictBadge = (verdict?: string, isRecalled?: boolean) => {
   );
 };
 
-export const ProductCard = ({ product, onAddToCart, showAddButton = true }: ProductCardProps) => {
+export const ProductCard = ({ product, onAddToCart, showAddButton = true, alreadyInCart = false }: ProductCardProps) => {
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(alreadyInCart);
+  const verdict = effectiveVerdict(product);
+
+  const handleAdd = async () => {
+    if (added || adding || !onAddToCart) return;
+    setAdding(true);
+    try {
+      await onAddToCart(product);
+      setAdded(true);
+    } finally {
+      setAdding(false);
+    }
+  };
+
   return (
     <div className="rounded-2xl overflow-hidden border border-transparent bg-transparent hover:bg-white hover:border-black/[0.06] transition-colors duration-200">
       <div className="p-6">
@@ -53,7 +86,7 @@ export const ProductCard = ({ product, onAddToCart, showAddButton = true }: Prod
             <h3 className="text-lg font-semibold text-[#1A1A1A] mb-1">{product.product_name}</h3>
             <p className="text-[#888] text-sm">{product.brand_name}</p>
           </div>
-          {verdictBadge(product.verdict, product.is_recalled)}
+          {verdictBadge(verdict, product.is_recalled)}
         </div>
 
         <div className="space-y-1 text-sm text-[#888] mb-4">
@@ -61,7 +94,6 @@ export const ProductCard = ({ product, onAddToCart, showAddButton = true }: Prod
           {product.category && <p><span className="font-medium text-[#1A1A1A]">Category:</span> {product.category}</p>}
         </div>
 
-        {/* Risk notifications inline */}
         {product.notifications && product.notifications.length > 0 && (
           <div className="space-y-2 mb-4">
             {product.notifications.slice(0, 3).map((n, i) => (
@@ -70,7 +102,7 @@ export const ProductCard = ({ product, onAddToCart, showAddButton = true }: Prod
                 n.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-800 border border-amber-100' :
                 'bg-black/[0.02] text-[#555] border border-black/5'
               }`}>
-                <span className="font-semibold">{n.title}:</span> {n.message}
+                <span className="font-semibold">{n.title}:</span> {n.summary || n.message}
               </div>
             ))}
           </div>
@@ -78,10 +110,25 @@ export const ProductCard = ({ product, onAddToCart, showAddButton = true }: Prod
 
         {product.is_recalled && product.recall_info && <RecallAlert recall={product.recall_info} />}
 
-        {showAddButton && !product.is_recalled && product.verdict !== 'DONT_BUY' && onAddToCart && (
-          <button onClick={() => onAddToCart(product)}
-            className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors duration-200">
-            <ShoppingCart className="w-4 h-4" /> Add to My Groceries
+        {showAddButton && !product.is_recalled && verdict !== 'DONT_BUY' && onAddToCart && (
+          <button
+            onClick={handleAdd}
+            disabled={added || adding}
+            className={`mt-4 w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-300 ${
+              added
+                ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 cursor-default'
+                : adding
+                  ? 'border border-black/10 text-[#888] cursor-wait'
+                  : 'text-[#1A1A1A] border border-black/10 hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A]'
+            }`}
+          >
+            {added ? (
+              <><Check className="w-4 h-4" /> Added</>
+            ) : adding ? (
+              'Adding…'
+            ) : (
+              <><ShoppingCart className="w-4 h-4" /> Add to Groceries</>
+            )}
           </button>
         )}
       </div>

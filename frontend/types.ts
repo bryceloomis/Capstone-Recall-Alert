@@ -30,10 +30,18 @@ export interface RecallInfo {
   summary?: RecallSummary;
 }
 
+export interface NotificationCard {
+  label: string;
+  body: string;
+}
+
 export interface RiskNotification {
   type: 'RECALL' | 'ALLERGEN' | 'DIET' | 'ADDITIVE' | 'WARNING';
   severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  is_safety_risk: boolean;
   title: string;
+  summary: string;
+  cards: NotificationCard[];
   message: string;
 }
 
@@ -55,12 +63,15 @@ export interface DietFlag {
 export interface HardStop {
   gate: string;
   reason: string;
+  allergen?: string;
+  diet?: string;
 }
 
 export interface CautionSignal {
   category: string;
   detail: string;
   points: number;
+  is_safety_risk?: boolean;
 }
 
 export interface RiskReport {
@@ -162,7 +173,7 @@ export interface AuthUser {
   state?: string;
   allergens?: string[];
   diet_preferences?: string[];
-  created_at: string;
+  created_at?: string;
 }
 
 export interface UserProfile {

@@ -6,6 +6,7 @@ import { User, Bell, Shield, Info, LogOut, Wheat, Leaf, Loader2, Check, MapPin, 
 import { useStore } from './store';
 import { getUserProfile, updateUserProfile } from './api';
 import { COMMON_ALLERGENS, COMMON_DIETS, US_STATES } from './types';
+import { toast } from './Toast';
 
 export const Settings = () => {
   const userId = useStore((s) => s.userId);
@@ -19,8 +20,6 @@ export const Settings = () => {
   const setDietPreferences = useStore((s) => s.setDietPreferences);
 
   const isSignedIn = userProfile != null && (userProfile.name != null || userProfile.email != null);
-  // userProfile.id may be missing in old sessions; userId in store is the string fallback
-  const resolvedId = userProfile?.id ?? (userId && userId !== 'test_user' ? parseInt(userId) : undefined);
 
   const [localAllergens, setLocalAllergens] = useState<string[]>(allergens);
   const [localDiets, setLocalDiets] = useState<string[]>(dietPreferences);
@@ -36,14 +35,10 @@ export const Settings = () => {
   });
 
   useEffect(() => {
-    if (!isSignedIn || !resolvedId) return;
+    if (!isSignedIn || !userProfile?.id) return;
     setLoadingProfile(true);
-    getUserProfile(resolvedId)
+    getUserProfile(userProfile.id)
       .then((p) => {
-        // Patch userProfile in store if id was missing
-        if (!userProfile?.id && p.id) {
-          setUserProfile({ ...userProfile, id: p.id });
-        }
         if (p.allergens) {
           const known = COMMON_ALLERGENS as readonly string[];
           const standard = p.allergens.filter((a: string) => known.includes(a));
@@ -57,7 +52,7 @@ export const Settings = () => {
       })
       .catch(() => {})
       .finally(() => setLoadingProfile(false));
-  }, [resolvedId]);
+  }, [userProfile?.id]);
 
   const toggleChip = (list: string[], item: string, setter: (v: string[]) => void) => {
     setter(list.includes(item) ? list.filter(x => x !== item) : [...list, item]);
@@ -83,10 +78,10 @@ export const Settings = () => {
   const allAllergens = [...localAllergens, ...customIngredients];
 
   const handleSaveProfile = async () => {
-    if (!resolvedId) return;
+    if (!userProfile?.id) return;
     setSaving(true);
     try {
-      await updateUserProfile(resolvedId, {
+      await updateUserProfile(userProfile.id, {
         allergens: allAllergens,
         diet_preferences: localDiets,
         state: localState || undefined,
@@ -95,7 +90,7 @@ export const Settings = () => {
       setDietPreferences(localDiets);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch { alert('Failed to save. Please try again.'); }
+    } catch { toast.error('Failed to save. Please try again.'); }
     finally { setSaving(false); }
   };
 

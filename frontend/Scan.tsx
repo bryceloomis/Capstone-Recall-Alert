@@ -8,7 +8,8 @@ import { BarcodeScanner } from './BarcodeScanner';
 import { ScanResultModal } from './ScanResultModal';
 import { ReceiptScan } from './ReceiptScan';
 import { riskScan, scanResponseToProduct } from './api';
-import { useAddToCart } from './useProduct';
+import { toast } from './Toast';
+import { useAddToCart, useCart } from './useProduct';
 import { useStore } from './store';
 import type { Product, ScanResponse } from './types';
 
@@ -25,6 +26,8 @@ export const Scan = () => {
   const userId = useStore((s) => s.userId);
   const userProfile = useStore((s) => s.userProfile);
   const isSignedIn = userProfile != null && (userProfile.name != null || userProfile.email != null);
+  const { data: cartData } = useCart(isSignedIn ? userId : '');
+  const cartUpcs = new Set(cartData?.cart?.map((c) => c.upc) ?? []);
 
   const handleScan = async (barcode: string) => {
     setShowScanner(false);
@@ -34,14 +37,17 @@ export const Scan = () => {
       setScanResult(scan);
       setScannedProduct(scanResponseToProduct(scan));
     } catch {
-      alert('Could not look up product. Try again or search by name on Home.');
+      toast.error('Could not look up product. Try again or search by name.');
     } finally {
       setIsLooking(false);
     }
   };
 
+  const [addedManually, setAddedManually] = useState(false);
+  const added = addedManually || (scannedProduct != null && cartUpcs.has(scannedProduct.upc));
+
   const handleAddToCart = async (product: Product) => {
-    if (!isSignedIn) return;
+    if (!isSignedIn || added) return;
     try {
       await addToCartMutation.mutateAsync({
         user_id: userId,
@@ -50,21 +56,24 @@ export const Scan = () => {
         brand_name: product.brand_name,
         added_date: new Date().toISOString(),
       });
-      alert('Added to My Groceries!');
+      setAddedManually(true);
+      toast.success('Added to My Groceries!');
     } catch {
-      alert('Error adding to list — please try again.');
+      toast.error('Error adding to list — please try again.');
     }
   };
 
   const handleScanAgain = () => {
     setScannedProduct(null);
     setScanResult(null);
+    setAddedManually(false);
     setShowScanner(true);
   };
 
   const handleClose = () => {
     setScannedProduct(null);
     setScanResult(null);
+    setAddedManually(false);
     setShowScanner(false);
   };
 
@@ -129,6 +138,7 @@ export const Scan = () => {
               onScanAgain={handleScanAgain}
               onClose={handleClose}
               isAdding={addToCartMutation.isPending}
+              isAdded={added}
             />
           )}
         </>

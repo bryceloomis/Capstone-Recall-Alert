@@ -3,8 +3,9 @@
  * Displays verdict, notifications, allergen matches, diet flags, recall summary,
  * and product info from GET /api/risk/scan/{upc}.
  */
+import { useState } from 'react';
 import {
-  X, AlertTriangle, CheckCircle, ShoppingCart, Camera,
+  X, AlertTriangle, CheckCircle, ShoppingCart, Camera, Check,
   ShieldAlert, ShieldCheck, ShieldX, AlertCircle, Wheat, Leaf,
 } from 'lucide-react';
 import type { ScanResponse, Product, RiskNotification, AllergenMatch, DietFlag } from './types';
@@ -17,6 +18,7 @@ interface ScanResultModalProps {
   onScanAgain: () => void;
   onClose: () => void;
   isAdding?: boolean;
+  isAdded?: boolean;
 }
 
 const verdictConfig = {
@@ -44,10 +46,22 @@ const verdictConfig = {
 } as const;
 
 function NotificationCard({ n }: { n: RiskNotification }) {
-  const colors = {
-    HIGH: 'border-red-200 bg-red-50 text-red-900',
-    MEDIUM: 'border-amber-200 bg-amber-50 text-amber-900',
-    LOW: 'border-black/10 bg-black/[0.02] text-black',
+  const [expanded, setExpanded] = useState(false);
+
+  const borderColors = {
+    HIGH: 'border-red-200 bg-red-50',
+    MEDIUM: 'border-amber-200 bg-amber-50',
+    LOW: 'border-black/10 bg-black/[0.02]',
+  };
+  const textColors = {
+    HIGH: 'text-red-900',
+    MEDIUM: 'text-amber-900',
+    LOW: 'text-black',
+  };
+  const badgeColors = {
+    HIGH: 'bg-red-200 text-red-800',
+    MEDIUM: 'bg-amber-200 text-amber-800',
+    LOW: 'bg-black/10 text-black/60',
   };
   const icons = {
     RECALL: AlertTriangle,
@@ -59,15 +73,47 @@ function NotificationCard({ n }: { n: RiskNotification }) {
   const Icon = icons[n.type] ?? AlertCircle;
 
   return (
-    <div className={`rounded-xl border p-3.5 ${colors[n.severity]}`}>
-      <div className="flex items-start gap-3">
-        <Icon className="w-4 h-4 shrink-0 mt-0.5" />
+    <div className={`rounded-xl border ${borderColors[n.severity]} overflow-hidden`}>
+      <div
+        className="flex items-start gap-3 p-3.5 cursor-pointer"
+        onClick={() => n.cards?.length > 0 && setExpanded(!expanded)}
+      >
+        <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${textColors[n.severity]}`} />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold">{n.title}</p>
-          <p className="text-xs mt-0.5 opacity-80">{n.message}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className={`text-sm font-semibold ${textColors[n.severity]}`}>{n.title}</p>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${badgeColors[n.severity]}`}>
+              {n.type}
+            </span>
+            {!n.is_safety_risk && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/5 text-black/50">
+                preference
+              </span>
+            )}
+          </div>
+          <p className={`text-xs mt-0.5 ${textColors[n.severity]} opacity-80`}>
+            {n.summary || n.message}
+          </p>
         </div>
-        <span className="text-[10px] font-mono uppercase opacity-50 shrink-0">{n.type}</span>
+        {n.cards?.length > 0 && (
+          <span className={`text-xs shrink-0 ${textColors[n.severity]} opacity-60`}>
+            {expanded ? '▲' : '▼'}
+          </span>
+        )}
       </div>
+
+      {expanded && n.cards?.length > 0 && (
+        <div className={`border-t ${n.severity === 'HIGH' ? 'border-red-200' : n.severity === 'MEDIUM' ? 'border-amber-200' : 'border-black/10'} divide-y ${n.severity === 'HIGH' ? 'divide-red-100' : n.severity === 'MEDIUM' ? 'divide-amber-100' : 'divide-black/5'}`}>
+          {n.cards.map((card, i) => (
+            <div key={i} className="px-4 py-3">
+              <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${textColors[n.severity]} opacity-60`}>
+                {card.label}
+              </p>
+              <p className={`text-sm ${textColors[n.severity]}`}>{card.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -139,6 +185,7 @@ export const ScanResultModal = ({
   onScanAgain,
   onClose,
   isAdding = false,
+  isAdded = false,
 }: ScanResultModalProps) => {
   const verdict = scan?.verdict ?? (product.is_recalled ? 'DONT_BUY' : 'OK');
   const vc = verdictConfig[verdict] ?? verdictConfig.OK;
@@ -256,14 +303,24 @@ export const ScanResultModal = ({
       {/* Footer */}
       <div className="shrink-0 px-5 py-4 border-t border-black/10 space-y-3 bg-white">
         {isSignedIn ? (
-          <button onClick={() => { onAddToCart(product); onClose(); }} disabled={isAdding}
-            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-opacity disabled:opacity-50 ${
-              verdict === 'OK'
-                ? 'bg-black text-white hover:opacity-90'
-                : 'border border-black/20 bg-white text-black hover:bg-black/5'
-            }`}>
-            <ShoppingCart className="w-4 h-4" />
-            {isAdding ? 'Adding…' : verdict === 'OK' ? 'Add to My Groceries' : 'Add to My Groceries anyway'}
+          <button
+            onClick={() => { if (!isAdded) { onAddToCart(product); onClose(); } }}
+            disabled={isAdding || isAdded}
+            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-300 ${
+              isAdded
+                ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 cursor-default'
+                : verdict === 'OK'
+                  ? 'bg-black text-white hover:opacity-90'
+                  : 'border border-black/20 bg-white text-black hover:bg-black/5'
+            }`}
+          >
+            {isAdded ? (
+              <><Check className="w-4 h-4" /> Added</>
+            ) : isAdding ? (
+              'Adding…'
+            ) : (
+              <><ShoppingCart className="w-4 h-4" /> {verdict === 'OK' ? 'Add to My Groceries' : 'Add to My Groceries anyway'}</>
+            )}
           </button>
         ) : (
           <p className="text-center text-sm text-[#888]">

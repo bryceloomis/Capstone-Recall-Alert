@@ -12,11 +12,13 @@
 import { useMemo, useState } from 'react';
 import {
   ShoppingCart, Loader2, LogIn, Trash2,
-  CheckCircle, ShieldX, ChevronDown, ChevronRight,
+  CheckCircle, ShieldX, ShieldAlert, ChevronDown, ChevronRight,
   Receipt, ScanLine, Store,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useCart, useRemoveFromCart, useAlerts, useDismissAlert } from './useProduct';
+import { getCartRisk } from './api';
 import { useStore } from './store';
 import type { CartItem } from './types';
 
@@ -104,6 +106,12 @@ export const MyGroceries = () => {
 
   const { data: cartData, isLoading: cartLoading } = useCart(userId);
   const { data: alertsData, isLoading: alertsLoading } = useAlerts(userId);
+  const { data: riskData, isLoading: riskLoading } = useQuery({
+    queryKey: ['cartRisk', userId],
+    queryFn: () => getCartRisk(userId!),
+    enabled: !!userId && isSignedIn,
+    staleTime: 60_000,
+  });
   const removeMutation = useRemoveFromCart();
   const dismissMutation = useDismissAlert(userId);
 
@@ -153,6 +161,19 @@ export const MyGroceries = () => {
   };
 
   const isLoading = cartLoading || alertsLoading;
+
+  const VerdictBadge = ({ verdict, isRecalled }: { verdict?: string | null; isRecalled: boolean }) => {
+    if (verdict === 'DONT_BUY' || isRecalled) {
+      return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium"><ShieldX className="w-3 h-3" />{isRecalled ? 'Recalled' : "Don't buy"}</span>;
+    }
+    if (verdict === 'CAUTION') {
+      return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium"><ShieldAlert className="w-3 h-3" />Caution</span>;
+    }
+    if (verdict === 'OK') {
+      return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium"><CheckCircle className="w-3 h-3" />Safe</span>;
+    }
+    return null;
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
@@ -205,6 +226,11 @@ export const MyGroceries = () => {
 
           {!isLoading && trips.length > 0 && (
             <div className="space-y-4">
+              {riskLoading && (
+                <p className="text-xs text-[#888] flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Running risk analysis…
+                </p>
+              )}
               {trips.map((trip) => {
                 const open = isTripOpen(trip.id);
                 const recalledCount = trip.items.filter((i) =>
@@ -268,11 +294,17 @@ export const MyGroceries = () => {
                           const key = item.product_name.toLowerCase().trim();
                           const isRecalled = recalledNames.has(key);
                           const alert = alertByName.get(key);
+                          const risk = item.upc ? riskData?.results?.[item.upc] : undefined;
+                          const verdict = isRecalled ? 'DONT_BUY' : (risk?.verdict ?? null);
+                          const notifications = risk?.notifications ?? [];
 
                           return (
                             <div
                               key={`${item.upc ?? item.product_name}-${item.added_date}`}
-                              className={`px-4 py-3 bg-white ${isRecalled ? 'bg-red-50/30' : ''}`}
+                              className={`px-4 py-3 bg-white ${
+                                verdict === 'DONT_BUY' ? 'bg-red-50/30' :
+                                verdict === 'CAUTION' ? 'bg-amber-50/20' : ''
+                              }`}
                             >
                               <div className="flex items-start justify-between gap-4">
                                 <div className="flex-1 min-w-0">
@@ -280,19 +312,29 @@ export const MyGroceries = () => {
                                     <span className="text-sm font-medium text-black">
                                       {item.product_name}
                                     </span>
-                                    {isRecalled ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium">
-                                        <ShieldX className="w-3 h-3" /> Recalled
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">
-                                        <CheckCircle className="w-3 h-3" /> Safe
-                                      </span>
-                                    )}
+                                    <VerdictBadge verdict={verdict} isRecalled={isRecalled} />
                                   </div>
                                   {item.brand_name && (
                                     <p className="text-xs text-[#888] mt-0.5">{item.brand_name}</p>
                                   )}
+
+                                  {/* Risk notifications (allergen, diet, additive) */}
+                                  {!isRecalled && notifications.length > 0 && (
+                                    <div className="mt-2 space-y-1">
+                                      {notifications.slice(0, 3).map((n, i) => (
+                                        <p key={i} className={`text-xs px-2 py-1 rounded ${
+                                          n.severity === 'HIGH' ? 'bg-red-50 text-red-700' :
+                                          n.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-700' :
+                                          'bg-black/[0.02] text-[#555]'
+                                        }`}>
+                                          <span className="font-medium">{n.title}:</span>{' '}
+                                          {n.summary || n.message}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {/* Recall details + dismiss */}
                                   {isRecalled && alert && (
                                     <div className="mt-2 space-y-1.5">
                                       <p className="text-xs text-red-700">
@@ -341,11 +383,6 @@ export const MyGroceries = () => {
         </>
       )}
 
-      <div className="pt-4 border-t border-black/10 text-center">
-        <Link to="/groceries-example" className="text-xs text-[#888] hover:text-black transition-colors">
-          View demo example →
-        </Link>
-      </div>
     </div>
   );
 };

@@ -208,8 +208,19 @@ export const updateUserProfile = async (
   userId: number | string,
   updates: { allergens?: string[]; diet_preferences?: string[]; state?: string }
 ): Promise<AuthUser> => {
-  const { data } = await api.patch<{ message: string; user: AuthUser }>(`/api/users/${userId}/profile`, updates);
-  return data.user;
+  const { data } = await api.patch<{ message: string; user: Record<string, unknown> }>(
+    `/api/users/${userId}/profile`,
+    updates,
+  );
+  const u = data.user;
+  return {
+    id: (u.user_id ?? u.id) as number,
+    name: u.name as string,
+    email: u.email as string,
+    state: u.state as string | undefined,
+    allergens: (u.allergens ?? []) as string[],
+    diet_preferences: (u.diet_preferences ?? []) as string[],
+  };
 };
 
 /** Get recall alerts for a user. */
@@ -239,6 +250,20 @@ export const markAlertViewed = async (alertId: number) => {
 /** Dismiss an alert — user says "that's not my product". */
 export const dismissAlert = async (alertId: number) => {
   const { data } = await api.patch(`/api/alerts/${alertId}/dismiss`);
+  return data;
+};
+
+/** Batch risk scan for all cart items — uses stored ingredients, no external calls. */
+export const getCartRisk = async (userId: string | number) => {
+  const { data } = await api.get<{
+    user_id: number;
+    results: Record<string, {
+      verdict: 'DONT_BUY' | 'CAUTION' | 'OK' | null;
+      notifications: import('./types').RiskNotification[];
+      is_recalled: boolean;
+      product_name: string;
+    }>;
+  }>(`/api/risk/cart/${userId}`);
   return data;
 };
 

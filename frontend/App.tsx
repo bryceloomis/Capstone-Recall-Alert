@@ -10,9 +10,9 @@ import { Onboarding } from './Onboarding';
 import { Layout } from './Layout';
 import { Home } from './Home';
 import { MyGroceries } from './MyGroceries';
+import { Toaster } from './Toast';
 
 const Scan = lazy(() => import('./Scan').then(m => ({ default: m.Scan })));
-import { MyGroceriesExample } from './MyGroceriesExample';
 import { Settings } from './Settings';
 
 const queryClient = new QueryClient({
@@ -34,12 +34,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <Toaster />
         <Layout>
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/scan" element={<Suspense fallback={<div className="p-4 text-center">Loading…</div>}><Scan /></Suspense>} />
             <Route path="/groceries" element={<MyGroceries />} />
-            <Route path="/groceries-example" element={<MyGroceriesExample />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

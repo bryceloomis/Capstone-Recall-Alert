@@ -552,18 +552,21 @@ def _build_notifications(
  
         # ── ALLERGEN notification ─────────────────────────────────────────────
         elif h.gate == "ALLERGEN":
-            # Find the AllergenMatch object(s) that triggered this hard stop
-            allergen_name   = "allergen"
-            matched_tokens: list[str] = []
-            is_advisory     = False   # True if triggered by "may contain" language
+            # h.allergen is set directly in _evaluate_hard_stops — no need to
+            # reverse-engineer it from the reason string (which caused false
+            # matches when the same token e.g. "almond flour" appeared in both
+            # a Tree Nuts and a Wheat hard stop reason simultaneously).
+            allergen_name = h.allergen or "allergen"
+            is_advisory   = False
  
+            # Collect all matched tokens for this specific allergen only.
+            matched_tokens: list[str] = []
             for m in report.allergen_matches:
-                if (
-                    m.allergen.lower() in h.reason.lower()
-                    or m.matched_token in h.reason
-                ):
-                    allergen_name = m.allergen
-                    matched_tokens.append(m.matched_token)
+                if m.allergen == allergen_name:
+                    # Strip the "advisory:" prefix from advisory match keys
+                    token = m.matched_token.replace("advisory:", "").strip()
+                    if token not in matched_tokens:
+                        matched_tokens.append(token)
                     if m.is_advisory:
                         is_advisory = True
  
@@ -665,11 +668,12 @@ def _build_notifications(
  
         # ── DIET_STRICT notification ──────────────────────────────────────────
         elif h.gate == "DIET_STRICT":
-            diet_name     = "your diet"
+            # h.diet is set directly in _evaluate_hard_stops — use it to look
+            # up the exact flagged token without string-matching the reason.
+            diet_name     = h.diet or "your diet"
             flagged_token = ""
             for f in report.diet_flags:
-                if f.flagged_token in h.reason:
-                    diet_name     = f.diet
+                if f.diet == diet_name and f.flagged_token in h.reason:
                     flagged_token = f.flagged_token
                     break
  
