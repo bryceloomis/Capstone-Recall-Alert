@@ -979,7 +979,7 @@ _STRICT_DIETS = frozenset({
 # Score threshold for non-additive soft signals to flip verdict to CAUTION.
 # ADDITIVE signals bypass this threshold entirely — any single additive
 # triggers CAUTION directly regardless of accumulated score.
-CAUTION_THRESHOLD = 15
+CAUTION_THRESHOLD = 1
  
  
 # ── Known controversial additives ─────────────────────────────────────────────

@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import {
   X, AlertTriangle, CheckCircle, ShoppingCart, Camera, Package,
-  ShieldAlert, ShieldCheck, ShieldX, AlertCircle, Wheat, Leaf,
+  ShieldAlert, ShieldCheck, ShieldX, AlertCircle, Wheat, Leaf, Check,
 } from 'lucide-react';
 import type { ScanResponse, Product, RiskNotification, AllergenMatch, DietFlag } from './types';
 
@@ -18,6 +18,7 @@ interface ScanResultModalProps {
   onScanAgain: () => void;
   onClose: () => void;
   isAdding?: boolean;
+  isAdded?: boolean;
 }
 
 const verdictConfig = {
@@ -184,6 +185,7 @@ export const ScanResultModal = ({
   onScanAgain,
   onClose,
   isAdding = false,
+  isAdded = false,
 }: ScanResultModalProps) => {
   const verdict = scan?.verdict ?? (product.is_recalled ? 'DONT_BUY' : 'OK');
   const vc = verdictConfig[verdict] ?? verdictConfig.OK;
@@ -311,14 +313,24 @@ export const ScanResultModal = ({
       {/* Footer */}
       <div className="shrink-0 px-5 py-4 border-t border-black/10 space-y-3 bg-white">
         {isSignedIn ? (
-          <button onClick={() => onAddToCart(product)} disabled={isAdding}
-            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-opacity disabled:opacity-50 ${
-              verdict === 'OK'
-                ? 'bg-black text-white hover:opacity-90'
-                : 'border border-black/20 bg-white text-black hover:bg-black/5'
-            }`}>
-            <ShoppingCart className="w-4 h-4" />
-            {isAdding ? 'Adding…' : verdict === 'OK' ? 'Add to My Groceries' : 'Add to My Groceries anyway'}
+          <button
+            onClick={() => !isAdded && onAddToCart(product)}
+            disabled={isAdding || isAdded}
+            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-300 ${
+              isAdded
+                ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 cursor-default'
+                : verdict === 'OK'
+                  ? 'bg-black text-white hover:opacity-90'
+                  : 'border border-black/20 bg-white text-black hover:bg-black/5'
+            }`}
+          >
+            {isAdded ? (
+              <><Check className="w-4 h-4" /> Added</>
+            ) : isAdding ? (
+              'Adding…'
+            ) : (
+              <><ShoppingCart className="w-4 h-4" /> {verdict === 'OK' ? 'Add to Groceries' : 'Add to Groceries anyway'}</>
+            )}
           </button>
         ) : (
           <p className="text-center text-sm text-[#888]">

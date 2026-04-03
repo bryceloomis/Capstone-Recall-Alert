@@ -53,7 +53,7 @@ export const MyGroceries = () => {
     catch { return dateStr; }
   };
 
-  const VerdictBadge = ({ verdict, isRecalled }: { verdict?: string | null; isRecalled: boolean }) => {
+  const VerdictBadge = ({ verdict, isRecalled }: { verdict?: string; isRecalled: boolean }) => {
     if (verdict === 'DONT_BUY' || isRecalled) {
       return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium"><ShieldX className="w-3 h-3" />{isRecalled ? 'Recalled' : "Don't buy"}</span>;
     }
@@ -117,8 +117,11 @@ export const MyGroceries = () => {
                 const product = detail?.product;
                 const scan = detail?.scan;
                 const isRecalled = product?.is_recalled ?? false;
-                const verdict = product?.verdict ?? scan?.verdict;
+                const rawVerdict = product?.verdict ?? scan?.verdict;
                 const notifications = scan?.notifications ?? [];
+                const hasCautionSignals = scan?.risk?.caution_signals && scan.risk.caution_signals.length > 0;
+                const verdict = (rawVerdict === 'OK' || !rawVerdict) && (notifications.length > 0 || hasCautionSignals)
+                  ? 'CAUTION' : rawVerdict;
 
                 return (
                   <div key={item.upc}
@@ -138,14 +141,13 @@ export const MyGroceries = () => {
                         {notifications.length > 0 && (
                           <div className="mt-2 space-y-1">
                             {notifications.slice(0, 3).map((n, i) => (
-                              <div key={i} className={`text-xs px-2 py-1.5 rounded ${
+                              <p key={i} className={`text-xs px-2 py-1 rounded ${
                                 n.severity === 'HIGH' ? 'bg-red-50 text-red-700' :
                                 n.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-700' :
                                 'bg-black/[0.02] text-[#555]'
                               }`}>
-                                <span className="font-semibold">{n.title}: </span>
-                                {n.summary || n.message}
-                              </div>
+                                <span className="font-medium">{n.title}:</span> {n.summary || n.message}
+                              </p>
                             ))}
                           </div>
                         )}
@@ -197,9 +199,6 @@ export const MyGroceries = () => {
         </>
       )}
 
-      <div className="pt-4 border-t border-black/10 text-center">
-        <Link to="/groceries-example" className="text-xs text-[#888] hover:text-black transition-colors">View demo example →</Link>
-      </div>
     </div>
   );
 };
