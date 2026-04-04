@@ -46,6 +46,7 @@ export const Home = () => {
         user_id: userId, upc: product.upc,
         product_name: product.product_name, brand_name: product.brand_name,
         added_date: new Date().toISOString(),
+        source: 'manual',
       });
       toast.success('Added to My Groceries!');
     } catch (error) {

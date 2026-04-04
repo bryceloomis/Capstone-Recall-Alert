@@ -13,7 +13,7 @@ import { useMemo, useState } from 'react';
 import {
   ShoppingCart, Loader2, LogIn, Trash2,
   CheckCircle, ShieldX, ShieldAlert, ChevronDown, ChevronRight,
-  Receipt, ScanLine, Store,
+  Receipt, ScanLine, Store, Search,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -27,7 +27,7 @@ import type { CartItem } from './types';
 interface Trip {
   id: string;
   date: string;           // YYYY-MM-DD, used for display
-  type: 'receipt' | 'barcode';
+  type: 'receipt' | 'barcode' | 'manual';
   store_name?: string | null;
   items: CartItem[];
 }
@@ -47,9 +47,9 @@ function groupIntoTrips(items: CartItem[]): Trip[] {
 
   for (const item of sorted) {
     const dateKey = toLocalDateKey(item.added_date);
-    const isReceipt = item.source === 'receipt';
+    const source = item.source ?? 'barcode';
 
-    if (isReceipt) {
+    if (source === 'receipt') {
       // Group receipt items that were added within 5 minutes of each other on the same day
       const existing = trips.find(
         (t) =>
@@ -67,6 +67,19 @@ function groupIntoTrips(items: CartItem[]): Trip[] {
           date: dateKey,
           type: 'receipt',
           store_name: item.store_name,
+          items: [item],
+        });
+      }
+    } else if (source === 'manual') {
+      // Manual search items: one block per calendar day
+      const existing = trips.find((t) => t.type === 'manual' && t.date === dateKey);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        trips.push({
+          id: `manual-${dateKey}`,
+          date: dateKey,
+          type: 'manual',
           items: [item],
         });
       }
@@ -169,9 +182,6 @@ export const MyGroceries = () => {
     if (verdict === 'CAUTION') {
       return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium"><ShieldAlert className="w-3 h-3" />Caution</span>;
     }
-    if (verdict === 'OK') {
-      return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium"><CheckCircle className="w-3 h-3" />Safe</span>;
-    }
     return null;
   };
 
@@ -252,7 +262,9 @@ export const MyGroceries = () => {
                       <div className="flex items-center gap-3">
                         {trip.type === 'receipt'
                           ? <Receipt className="w-4 h-4 text-[#888] shrink-0" />
-                          : <ScanLine className="w-4 h-4 text-[#888] shrink-0" />
+                          : trip.type === 'manual'
+                            ? <Search className="w-4 h-4 text-[#888] shrink-0" />
+                            : <ScanLine className="w-4 h-4 text-[#888] shrink-0" />
                         }
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
@@ -260,7 +272,7 @@ export const MyGroceries = () => {
                               {formatTripDate(trip.date)}
                             </span>
                             <span className="text-xs text-[#888]">
-                              {trip.type === 'receipt' ? 'Receipt scan' : 'Barcode scan'}
+                              {trip.type === 'receipt' ? 'Receipt scan' : trip.type === 'manual' ? 'Manual search' : 'Barcode scan'}
                             </span>
                             {trip.store_name && (
                               <span className="flex items-center gap-1 text-xs text-[#888]">

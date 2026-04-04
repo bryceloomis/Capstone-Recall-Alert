@@ -44,7 +44,7 @@ class UserCartItem(BaseModel):
     product_name: str
     brand_name:   str = ""
     added_date:   str = ""
-    source:       str = "barcode"        # 'barcode' | 'receipt'
+    source:       str = "barcode"        # 'barcode' | 'receipt' | 'manual'
 
 
 class ProfileUpdate(BaseModel):
@@ -264,15 +264,16 @@ async def add_to_cart(item: UserCartItem):
         raise HTTPException(status_code=401, detail="Must be signed in to save items.")
 
     if item.upc:
-        # Barcode-scanned item — has a real UPC
+        # Barcode/manual-scanned item — has a real UPC
+        source = item.source if item.source in ('barcode', 'manual') else 'barcode'
         result = execute_query(
             """
             INSERT INTO user_carts (user_id, product_upc, product_name, brand_name, source)
-            VALUES (%s, %s, %s, %s, 'barcode')
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (user_id, product_upc) DO NOTHING
             RETURNING product_upc AS upc, product_name, brand_name, added_date, source;
             """,
-            (uid, item.upc, item.product_name, item.brand_name),
+            (uid, item.upc, item.product_name, item.brand_name, source),
         )
     else:
         # Receipt-sourced item — no UPC
