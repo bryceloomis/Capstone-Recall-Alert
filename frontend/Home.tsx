@@ -226,7 +226,7 @@ function ScanCard() {
         }`}
       >
         <ScanOption icon={Camera} label="Barcode" sub="Use your camera" onClick={() => navigate('/scan')} border />
-        <ScanOption icon={Receipt} label="Receipt" sub="Upload a photo" onClick={() => navigate('/scan')} />
+        <ScanOption icon={Receipt} label="Receipt" sub="Upload a photo" onClick={() => navigate('/scan?tab=receipt')} />
       </div>
 
       {/* Desktop: spacer for hover height */}
@@ -237,7 +237,7 @@ function ScanCard() {
         <p className="text-xs font-medium text-white/40 uppercase tracking-wider px-6 pt-5 pb-2">Scan a product</p>
         <div className="flex">
           <ScanOption icon={Camera} label="Barcode" sub="Use your camera" onClick={() => navigate('/scan')} border />
-          <ScanOption icon={Receipt} label="Receipt" sub="Upload a photo" onClick={() => navigate('/scan')} />
+          <ScanOption icon={Receipt} label="Receipt" sub="Upload a photo" onClick={() => navigate('/scan?tab=receipt')} />
         </div>
       </div>
     </div>

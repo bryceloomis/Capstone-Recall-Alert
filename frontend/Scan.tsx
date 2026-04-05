@@ -3,6 +3,7 @@
  * Barcode scan calls GET /api/risk/scan/{upc} for full risk analysis.
  */
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Camera, Receipt, Loader2 } from 'lucide-react';
 import { BarcodeScanner } from './BarcodeScanner';
 import { ScanResultModal } from './ScanResultModal';
@@ -16,7 +17,9 @@ import type { Product, ScanResponse } from './types';
 type Tab = 'barcode' | 'receipt';
 
 export const Scan = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('barcode');
+  const [searchParams] = useSearchParams();
+  const initialTab: Tab = searchParams.get('tab') === 'receipt' ? 'receipt' : 'barcode';
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [showScanner, setShowScanner] = useState(false);
   const [isLooking, setIsLooking] = useState(false);
   const [scannedProduct, setScannedProduct] = useState<Product | null>(null);

@@ -519,6 +519,14 @@ async def search_product(search: ProductSearch):
                 recall_date=recall_info.get("recall_date") if recall_info else None,
             )
 
+            # If the only signal is LOW_CONFIDENCE (no real ingredient data),
+            # don't show a misleading CAUTION verdict — return null instead.
+            only_low_confidence = (
+                not risk_report.hard_stops
+                and all(s.category == "LOW_CONFIDENCE" for s in risk_report.caution_signals)
+            )
+            verdict = None if only_low_confidence else risk_report.verdict
+
             results.append({
                 "upc":          product["upc"],
                 "product_name": product["product_name"],
@@ -526,7 +534,7 @@ async def search_product(search: ProductSearch):
                 "category":     product.get("category") or "Unknown",
                 "is_recalled":  recall_info is not None,
                 "recall_info":  recall_info,
-                "verdict":      risk_report.verdict,
+                "verdict":      verdict,
                 "explanation":  risk_report.explanation,
                 "risk":         risk_report.to_dict(),
             })
