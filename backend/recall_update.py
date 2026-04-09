@@ -47,6 +47,7 @@ except Exception:
 from user_alerts import generate_alerts_for_new_recalls
 from LLM_services import llm_get_upc as _llm_get_upc
 from LLM_services import llm_get_location as _llm_get_location
+from LLM_services import get_groceries as _grocery_stores
 
 log = logging.getLogger(__name__)
 
@@ -100,17 +101,149 @@ def combined_upc(brand_product, code_information):
     elif len(code_information_upc) != 0:
         upc = code_information_upc
     else:
-        brand_product_upc_llm_clean = _llm_get_upc(str(brand_product)).replace("'","").split(",")
-        code_information_upc_llm_clean = _llm_get_upc(str(code_information)).replace("'","").split(",")
-        if brand_product_upc_llm_clean[0] != '' and len(brand_product_upc_llm_clean[0]) < 13:
+        brand_product_upc_llm_clean = _llm_get_upc(str(brand_product[:500])).replace("'","").split(",")
+        code_information_upc_llm_clean = _llm_get_upc(str(code_information[:500])).replace("'","").split(",")
+        
+        if(len(brand_product_upc_llm_clean) != 0) & (len(brand_product_upc_llm_clean) < 13):
             upc = brand_product_upc_llm_clean
-        elif code_information_upc_llm_clean[0] != '' and len(code_information_upc_llm_clean[0]) < 13:
+
+        elif (len(code_information_upc_llm_clean) != 0) & (len(code_information_upc_llm_clean) < 13):
             upc = code_information_upc_llm_clean
         else:
-            upc = []
-    upc = list(set(upc)) #remove duplicates
+            upc = ''
     return upc
 
+def product_clean(product, codeinformation):
+    product = product.lower()
+    codeinformation = codeinformation.lower()
+
+    upc = combined_upc(product, codeinformation)
+
+    if product[:6] == "item ":
+        product = product[14:]
+
+    first_digit = re.search(r'\d', product)
+    if first_digit:
+        if re.search(r'\d', product).start() > 15:
+            end = re.search(r'\d', product).start()
+            product = product[:end]
+
+    store = ''
+    grocery_stores = _grocery_stores()
+    for g in grocery_stores:
+        if g in product:
+            store = g
+            product = product.replace(store, "")
+
+    product = re.sub(r"\b(net\s*wt|net\s*weight|wt)\b", " ", product)
+    product = re.sub(r"\b(fl\s*oz|oz|lb|lbs|g|kg|ml|l|qt|pt|ct|count|pcs|pc)\b", " ", product)
+    product = re.sub(r"[^a-z0-9\s]", " ", product)
+    product = product.replace(",", "").replace(".", "").replace("\t", "")
+    product = re.sub(r"\s+", " ", product).strip()
+
+    return [product, upc]
+
+def remove_duplicates_ignore_index(list_of_lists, ignore_index):
+    seen = set()
+    result = []
+    for sublist in list_of_lists:
+        # Create a key for uniqueness by excluding the specified index
+        key = tuple(elem for idx, elem in enumerate(sublist) if idx != ignore_index)
+        if key not in seen:
+            seen.add(key)
+            result.append(sublist)
+    return result
+
+def product_listformat(product, codeinformation):
+    item_list = []
+    
+    #list format with 1.)
+    if product[:4] == "1.) ":
+        numbers = re.findall(r'\d+\.\)\s', product)
+        max = int(numbers[-1].replace(".)", ""))
+        
+        if codeinformation[:4] == "1.) ":
+            numbers_codeinfo = re.findall(r'\d+\.\)\s', codeinformation)
+            if numbers == numbers_codeinfo:
+                while max > 0:
+                    max_id = str(max) + ".) "
+                    a, b, c = product.partition(max_id)
+                    a1, b1, c1 = codeinformation.partition(max_id)
+                    item_list.append(product_clean(c, c1))
+                    max = max - 1
+        else:
+            while max > 0:
+                max_id = str(max) + ".) "
+                a, b, c = product.partition(max_id)
+                item_list.append(product_clean(c, ""))
+                max = max - 1
+        
+        if len(item_list) > 1:
+            unique_list = remove_duplicates_ignore_index(item_list, ignore_index=1)
+        else:
+            unique_list = item_list
+        return unique_list
+        
+    #list format with 1)
+    elif product[:3] == "1) ":
+        numbers = re.findall(r'\d+\)\s', product)
+        max = int(numbers[-1].replace(")", ""))
+
+        if codeinformation[:3] == "1) ":
+          numbers_codeinfo = re.findall(r'\d+\)\s', codeinformation)
+          if numbers == numbers_codeinfo:
+            while max > 0:
+              max_id = str(max) + ") "
+              a, b, c = product.partition(max_id)
+              a1, b1, c1 = codeinformation.partition(max_id)
+              item_list.append(product_clean(c, c1))
+              max = max - 1
+    
+        else:
+          while max > 0:
+            max_id = str(max) + ") "
+            a, b, c = product.partition(max_id)
+            item_list.append(product_clean(c, ""))
+            max = max - 1
+    
+        if len(item_list) > 1:
+          unique_list = remove_duplicates_ignore_index(item_list, ignore_index=1)
+        else:
+          unique_list = item_list
+        return unique_list
+        
+    #list format 1.
+    elif product[:3] == "1. ":
+        numbers = re.findall(r'\d+\.\s', product)
+        max = int(numbers[-1].replace(".", ""))
+    
+        if codeinformation[:3] == "1. ":
+          numbers_codeinfo = re.findall(r'\d+\.\s', codeinformation)
+          if numbers == numbers_codeinfo:
+            while max > 0:
+              max_id = str(max) + ". "
+              a, b, c = product.partition(max_id)
+              a1, b1, c1 = codeinformation.partition(max_id)
+              item_list.append(product_clean(c, c1))
+              max = max - 1
+    
+        else:
+          while max > 0:
+            max_id = str(max) + ". "
+            a, b, c = product.partition(max_id)
+            item_list.append(product_clean(c, ""))
+            max = max - 1
+    
+        if len(item_list) > 1:
+          unique_list = remove_duplicates_ignore_index(item_list, ignore_index=1)
+        else:
+          unique_list = item_list
+        return unique_list
+        
+    #otherwise, clean
+    else:
+        item_list.append(product_clean(product, codeinformation))
+        return item_list
 
 # ── FDA fetch ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -147,7 +280,7 @@ def combined_upc(brand_product, code_information):
 
 def fetch_new_recall_initiation():
     from datetime import date, timedelta
-    dt1 = (date.today() - timedelta(days = 50)).strftime("%Y%m%d")
+    dt1 = (date.today() - timedelta(days = 31)).strftime("%Y%m%d")
     dt2 = (date.today()).strftime("%Y%m%d")
     fda_initiated_url = f"https://api.fda.gov/food/enforcement.json?search=recall_initiation_date:[{dt1}+TO+{dt2}]+AND+status:'Ongoing'&limit=1000"
     fda_initiated = req.get(fda_initiated_url).json()
@@ -156,39 +289,65 @@ def fetch_new_recall_initiation():
     
     #convert API output into dataframe
     if fda_initiated == {'error': {'code': 'NOT_FOUND', 'message': 'No matches found!'}}:
-        item_dict = ''
         initiated_items.append('')
     else:
         for i in np.arange(0, len(fda_initiated['results'])):
             date = datetime.strptime(fda_initiated['results'][i]['recall_initiation_date'], '%Y%m%d').date()
-            brand_product = fda_initiated['results'][i]['recalling_firm'][:100] + ' ' + fda_initiated['results'][i]['product_description'][:400]
-            code_information = fda_initiated['results'][i]['code_info'][:500]
-            
             distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
             distribution_pattern_str = _llm_get_location(distribution_pattern).replace("'","").strip()
+            index = distribution_pattern_str.rfind(']')
+            if index != -1:
+                distribution_pattern_str_clean = distribution_pattern_str[:index + 1]
+            else:
+                distribution_pattern_str_clean = distribution_pattern_str
+    
+            product_cleaned = product_listformat(fda_initiated['results'][i]['product_description'], fda_initiated['results'][i]['code_info'])
 
+            for p in product_cleaned:
+                product_firm = p[0] + fda_initiated['results'][i]['recalling_firm'].lower()
 
-            upc_list = combined_upc(brand_product, code_information)
-            seen = set()
-            for upc_individual in upc_list:
-                key = (upc_individual, fda_initiated['results'][i]['product_description'][:255])
-                if key in seen:
-                    continue
-                seen.add(key)
-                item_dict = {"upc":upc_individual,
-                             "product_name":fda_initiated['results'][i]['product_description'][:255],
-                             "brand_name":fda_initiated['results'][i]['recalling_firm'],
+                grocery_stores = _grocery_stores()
+                for g in grocery_stores:
+                    if g in fda_initiated['results'][i]['recalling_firm'].lower():
+                        product_firm = p[0]
+
+                seen = set()
+                
+                if len(p[1]) > 0:
+                    for u in p[1]:
+                        key = (u, product_firm)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        item_dict = {"upc":u,
+                             "product_name":product_firm[:255],
+                             "brand_name":fda_initiated['results'][i]['recalling_firm'].lower(),
                              "recall_date":date,
                              "reason":fda_initiated['results'][i]['reason_for_recall'],
                              "severity":fda_initiated['results'][i]['classification'],
-                             "distribution_pattern":distribution_pattern_str,
+                             "distribution_pattern":distribution_pattern_str_clean,
                              "source":"fda"}
-                initiated_items.append(item_dict)
+                        initiated_items.append(item_dict)
+                else:
+                    key = ('', product_firm)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    item_dict = {"upc":'',
+                            "product_name":product_firm[:255],
+                            "brand_name":fda_initiated['results'][i]['recalling_firm'].lower(),
+                            "recall_date":date,
+                            "reason":fda_initiated['results'][i]['reason_for_recall'],
+                            "severity":fda_initiated['results'][i]['classification'],
+                            "distribution_pattern":distribution_pattern_str_clean,
+                            "source":"fda"}
+                    initiated_items.append(item_dict)
+                    
     return initiated_items
 
 def fetch_new_recall_termination():
     from datetime import date, timedelta
-    dt1 = (date.today() - timedelta(days = 14)).strftime("%Y%m%d")
+    dt1 = (date.today() - timedelta(days = 1)).strftime("%Y%m%d")
     dt2 = (date.today()).strftime("%Y%m%d")
     fda_terminated_url = f"https://api.fda.gov/food/enforcement.json?search=termination_date:[{dt1}+TO+{dt2}]+AND+status:'Terminated'&limit=1000"
     fda_terminated = req.get(fda_terminated_url).json()
@@ -200,9 +359,51 @@ def fetch_new_recall_termination():
         terminated_items.append('')
     else:
         for i in np.arange(0, len(fda_terminated['results'])):
-            item_dict = {"product_name":fda_terminated['results'][i]['product_description'][:500],
-                         "brand_name":fda_terminated['results'][i]['recalling_firm']}
-            terminated_items.append(item_dict)
+            date = datetime.strptime(fda_initiated['results'][i]['termination_date'], '%Y%m%d').date()
+            distribution_pattern = fda_initiated['results'][i]['distribution_pattern']
+            distribution_pattern_str = _llm_get_location(distribution_pattern).replace("'","").strip()
+            product_cleaned = product_listformat(fda_initiated['results'][i]['product_description'], fda_initiated['results'][i]['code_info'])
+
+            for p in product_cleaned:
+                product_firm = p[0] + fda_initiated['results'][i]['recalling_firm'].lower()
+
+                grocery_stores = _grocery_stores()
+                for g in grocery_stores:
+                    if g in fda_initiated['results'][i]['recalling_firm'].lower():
+                        product_firm = p[0]
+
+                seen = set()
+                
+                if len(p[1]) > 0:
+                    for u in p[1]:
+                        key = (u, product_firm)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        item_dict = {"upc":u,
+                             "product_name":product_firm[:255],
+                             "brand_name":fda_initiated['results'][i]['recalling_firm'].lower(),
+                             "recall_date":date,
+                             "reason":fda_initiated['results'][i]['reason_for_recall'],
+                             "severity":fda_initiated['results'][i]['classification'],
+                             "distribution_pattern":distribution_pattern_str,
+                             "source":"fda"}
+                        terminated_items.append(item_dict)
+                else:
+                    key = ('', product_firm)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    item_dict = {"upc":'',
+                            "product_name":product_firm[:255],
+                            "brand_name":fda_initiated['results'][i]['recalling_firm'].lower(),
+                            "recall_date":date,
+                            "reason":fda_initiated['results'][i]['reason_for_recall'],
+                            "severity":fda_initiated['results'][i]['classification'],
+                            "distribution_pattern":distribution_pattern_str,
+                            "source":"fda"}
+                    terminated_items.append(item_dict)
+    
     return terminated_items
 
 # ── Field mappers ─────────────────────────────────────────────────────────────────────────────────────
@@ -284,8 +485,9 @@ def add_item_recall(record: dict) -> bool:
             VALUES
               (%(upc)s, %(product_name)s, %(brand_name)s, %(recall_date)s,
                %(reason)s, %(severity)s, %(distribution_pattern)s, %(source)s)
-            ON CONFLICT (upc, recall_date)
+            ON CONFLICT (upc, product_name, brand_name)
             DO UPDATE SET
+                upc                 = EXCLUDED.upc,
                 reason              = EXCLUDED.reason,
                 severity            = EXCLUDED.severity,
                 distribution_pattern = EXCLUDED.distribution_pattern,
@@ -297,7 +499,8 @@ def add_item_recall(record: dict) -> bool:
         # xmax = 0 means the row was freshly inserted (not updated)
         return bool(result and result[0].get("inserted"))
     except Exception as exc:
-        log.error("upsert_recall error for product_name=%s: %s", record.get("product_name"), exc)
+        # log.error("upsert_recall error for product_name=%s: %s", record.get("product_name"), exc)
+        log.error("upsert_recall error for product", record)
         return False
 
 
@@ -308,14 +511,15 @@ def remove_item_recall(record: dict) -> bool:
         result = execute_query(
             """
             DELETE FROM recalls
-            WHERE product_name = %(product_name)s AND brand_name = %(brand_name)s
+            WHERE product_name = %(product_name)s AND brand_name = %(brand_name)s AND upc = %(upc)s
             """,
             record
         )
         # xmax = 0 means the row was freshly inserted (not updated)
         return True
     except Exception as exc:
-        log.error("remove_item_recall error for product_name=%s: %s", record.get("product_name"), exc)
+        # log.error("remove_item_recall error for product_name=%s: %s", record.get("product_name"), exc)
+        log.error("remove_item_recall  error for product", record)
         return False
     
 # def upsert_recall(record: dict) -> bool:
@@ -386,6 +590,7 @@ def _generate_recall_summary(recall_record: dict) -> None:
             severity=recall_record.get("severity", ""),
             brand_name=recall_record.get("brand_name", ""),
             distribution=recall_record.get("distribution_pattern", ""),
+            recall_date=recall_recorf.get("recall_date","")
         )
         if explanation:
             execute_query(
@@ -432,20 +637,22 @@ def run_recall_refresh() -> dict:
     initiated_items = fetch_new_recall_initiation()
     log.info("FDA: fetched %d raw records.", len(initiated_items))
     for fda_item in initiated_items:
-        was_inserted = add_item_recall(fda_item)
-        if was_inserted:
-            inserted += 1
-            _generate_recall_summary(fda_item)
-        else:
-            skipped += 1
+        if fda_item != '':
+            was_inserted = add_item_recall(fda_item)
+            if was_inserted:
+                inserted += 1
+                _generate_recall_summary(fda_item)
+            else:
+                skipped += 1
 
     terminated_items = fetch_new_recall_termination()
     for fda_item in terminated_items:
-        was_removed = remove_item_recall(fda_item)
-        if was_removed:
-            removed += 1
-        else:
-            removed_skipped += 1
+        if fda_item != '':
+            was_removed = remove_item_recall(fda_item)
+            if was_removed:
+                removed += 1
+            else:
+                removed_skipped += 1
     
     # fda_raw = fetch_fda_recalls()
     # log.info("FDA: fetched %d raw records.", len(fda_raw))
@@ -533,3 +740,5 @@ async def manual_refresh_recalls():
     # run_recall_refresh is synchronous (psycopg2 + requests); run in thread
     summary = await asyncio.to_thread(run_recall_refresh)
     return summary
+
+run_recall_refresh()
