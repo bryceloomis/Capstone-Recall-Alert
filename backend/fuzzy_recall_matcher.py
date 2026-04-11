@@ -10,6 +10,7 @@ import numpy as np
 from rapidfuzz import fuzz
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from scipy.special import expit
 
 
 def normalize_text(s: str) -> str:
@@ -25,6 +26,68 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+
+def calc_cosine_similarity(receipt_item_vec, recalls_vec):
+    cosine_similarity_index = []
+    n = 0
+
+    for r in recalls_vec:
+        cosine_similarity_index.append([cosine_similarity(receipt_item_vec, r)[0][0], n])
+        n = n + 1
+        
+    cosine_similarity_index = sorted(cosine_similarity_index, reverse = True)
+    return cosine_similarity_index[0][0], cosine_similarity_index [0][1]
+
+def calc_fuzz_similarity(receipt_item, recalls, fuzz_type):
+    fuzz_similarity_index = []
+    n = 0
+
+    for r in recalls:
+        if fuzz_type == 'partial':
+            fuzz_similarity_index.append([fuzz.partial_ratio(receipt_item, r)/100, n])
+        elif fuzz_type == 'token_set':
+            fuzz_similarity_index.append([fuzz.token_set_ratio(receipt_item, r)/100, n])
+        else:
+            fuzz_similarity_index.append(0)
+        n = n+1
+    
+    fuzz_similarity_index = sorted(fuzz_similarity_index, reverse = True)
+    return fuzz_similarity_index[0][0], fuzz_similarity_index[0][1]
+
+def calc_ce_similarity(receipt_item, recalls, ce):
+    ce_similarity_index = []
+    n = 0
+
+    for r in recalls:
+        pair = [receipt_item, r]
+        r_logit = (ce.predict(pair, batch_size = 64, show_progress_bar=False))
+        ce_similarity_index.append([expit(r_logit), n])
+        n = n+1
+        
+    ce_similarity_index = sorted(ce_similarity_index, reverse = True)
+    return ce_similarity_index[0][0], ce_similarity_index[0][1]
+
+def word_by_word_similarity(receipt, recall):
+  receipt_words = receipt.lower().split(" ")
+  recall_words = recall.lower().split(" ")
+
+  max_receiptword_recallword = []
+
+  for x in receipt_words:
+    if len(x) > 2:
+      max_similarity = 0
+      for y in recall_words:
+        if len(y) > 2:
+          similarity = fuzz.partial_ratio(x, y)/100
+          if similarity > max_similarity:
+            max_similarity = similarity
+
+      max_receiptword_recallword.append(max_similarity)
+
+  if (all(c > 0.55 for c in max_receiptword_recallword)) & ((sum(max_receiptword_recallword)/len(max_receiptword_recallword)) > 0.8):
+    return True
+  else:
+    return False
 
 @dataclass
 class RecallCandidate:
@@ -178,6 +241,122 @@ class TFIDFHybridRecallMatcher:
         )
 
 
+class EnsembleMatcher:
+    """
+    Ensemble matcher: waterfall method using best of four similarity measures
+    plus similarity on word-by-word basis
+    """
+    def __init__(
+        self,
+        candidates: List[RecallCandidate],
+        cutoff: int = 2,
+        mean_partial: float = 0.2245,
+        stdev_partial: float = 0.0615,
+        mean_tokenset: float = 0.1540,
+        stdev_tokenset: float = 0.05126,
+        mean_ce: float = 0.1751,
+        stdev_ce: float = 0.3556,
+        mean_tfidf: float = 0.3781,
+        stdev_tfidf: float = 0.2234,
+    ):
+        self.candidates = candidates
+        self.cutoff = cutoff
+        self.mean_partial = mean_partial
+        self.stdev_partial = stdev_partial
+        self.mean_tokenset = mean_tokenset
+        self.mean_ce = mean_ce
+        self.stdev_ce = stdev_ce
+        self.mean_tfidf = mean_tfidf
+        self.stdev_tfidf = stdev_tfidf
+
+        self.candidate_texts = [c for c in candidates]
+
+        if self.candidate_texts:
+            self.vectorizer = TfidfVectorizer(
+                analyzer="char_wb",
+                ngram_range=(3, 5),
+                min_df=1,
+            )
+            self.X_candidates = self.vectorizer.fit_transform(self.candidate_texts)
+        else:
+            self.vectorizer = None
+            self.X_candidates = None
+
+    def best_match(self, query: str) -> Optional[RecallMatch]:
+        from sentence_transformers import CrossEncoder
+        CE_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        ce = CrossEncoder(CE_MODEL)
+
+        q = normalize_text(query)
+        if not q or not self.candidate_texts or self.vectorizer is None or self.X_candidates is None:
+            return None
+
+        #rapidfuzz partial
+        similarity_partial, idx_partial = calc_fuzz_similarity(q, self.candidates_texts, "partial")
+        z_partial = (similarity_partial - self.mean_partial)/self.stdev_partial
+
+        #rapidfuzz tokenset
+        similarity_tokenset, idx_tokenset = calc_fuzz_similarity(q, self.candidates_texts, "token_set")
+        z_tokenset = (similarity_tokenset - self.mean_tokenset)/self.stdev_tokenset
+
+        #cross-encoder
+        similarity_ce, idx_ce = calc_ce_similarity(q, self.candidates_texts, ce)
+        z_ce = (similarity_ce - self.mean_ce)/self.stdev_ce
+
+        #tfidf
+        similarity_tfidf, idx_tfidf = calc_cosine_similarity(X_q, self.X_candidates)
+        z_tfidf = (similarity_tfidf - self.mean_tfidf)/self.stdev_tfidf
+
+
+        #sort similarity measures from best to worst
+        for_sort = [[z_partial, similarity_partial, idx_partial, cutoff],
+                    [z_tokenset, similarity_tokenset, idx_tokenset, cutoff],
+                    [z_ce, similarity_ce, idx_ce, cutoff],
+                    [ze_tfdif, similarity_tfidf, idx_tfidf, cutoff]]
+        for_sort = sorted(for_sort, reverse = True)
+
+        ensemble_similarity = ''
+        ensemble_index = ''
+
+        #use the similarity match for the best measure if it crosses the threshold AND
+        #word-by-word similarity also crosses threshold
+        #if not, move to next similarity measure and test again
+        if for_sort[0][0] >= for_sort[0][3]:
+            if word_by_word_similarity(receipt_item, recalls[for_sort[0][2]]):
+                ensemble_similarity = for_sort[0][1]
+                ensemble_index = for_sort[0][2]
+                
+        elif for_sort[1][0] >= for_sort[1][3]:
+            if word_by_word_similarity(receipt_item, recalls[for_sort[1][2]]):
+                ensemble_similarity = for_sort[1][1]
+                ensemble_index = for_sort[1][2]
+        
+        elif for_sort[2][0] >= for_sort[2][3]:
+            if word_by_word_similarity(receipt_item, recalls[for_sort[2][2]]):
+                ensemble_similarity = for_sort[2][1]
+                ensemble_index = for_sort[2][2]
+        
+        elif for_sort[3][0] >= for_sort[3][3]:
+            if word_by_word_similarity(receipt_item, recalls[for_sort[3][2]]):
+                ensemble_similarity = for_sort[3][1]
+                ensemble_index = for_sort[3][2]
+
+        best_idx = ensemble_index
+        if ensemble_similarity == '':
+            best_score = 0
+        else:
+            best_score = ensemble_similarity
+
+        if best_idx == '':
+            return None
+
+        return RecallMatch(
+            candidate=self.candidates[best_idx],
+            score=best_score,
+            algorithm="ensemble",
+        )
+
+
 def get_matcher(name: str, candidates: List[RecallCandidate]) -> RecallMatcher:
     name = (name or "tfidf_hybrid").lower()
 
@@ -186,5 +365,8 @@ def get_matcher(name: str, candidates: List[RecallCandidate]) -> RecallMatcher:
 
     if name == "tfidf_hybrid":
         return TFIDFHybridRecallMatcher(candidates)
+
+    if name == 'ensemble':
+        return EnsembleMatcher(candidates)
 
     raise ValueError(f"Unknown matcher: {name}")
